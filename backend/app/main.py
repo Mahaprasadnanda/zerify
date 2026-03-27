@@ -2,7 +2,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
@@ -44,11 +44,12 @@ app = FastAPI(
     ),
 )
 
+# ✅ ADD ROUTER WITH PREFIX
+api = APIRouter(prefix="/api")
+
 # -------------------------------------------------------
 # CORS CONFIGURATION
 # -------------------------------------------------------
-# Next.js dev is often opened as http://127.0.0.1:3000 OR http://localhost:3000 — both must be allowed
-# or the browser sends OPTIONS then never sends POST (verifier stuck on "Verifying…").
 
 app.add_middleware(
     CORSMiddleware,
@@ -63,7 +64,7 @@ app.add_middleware(
 # HEALTH CHECK
 # -------------------------------------------------------
 
-@app.get("/health")
+@api.get("/health")
 async def health() -> dict[str, str]:
     return {
         "status": "ok",
@@ -71,14 +72,13 @@ async def health() -> dict[str, str]:
     }
 
 
-# Convenience aliases (avoid confusion in manual testing tools / bookmarks).
-@app.get("/HEALTH")
-@app.get("/Health")
+@api.get("/HEALTH")
+@api.get("/Health")
 async def health_alias() -> dict[str, str]:
     return await health()
 
 
-@app.post("/scan-aadhaar")
+@api.post("/scan-aadhaar")
 async def scan_aadhaar(
     file: UploadFile | None = File(default=None),
     image: UploadFile | None = File(default=None),
@@ -135,13 +135,10 @@ async def scan_aadhaar(
 # GROTH16 (flexibleKyc circuit only)
 # -------------------------------------------------------
 
-@app.post("/verify-proof", response_model=VerifyProofResponse)
+@api.post("/verify-proof", response_model=VerifyProofResponse)
 async def verify_proof(payload: VerifyProofRequest) -> VerifyProofResponse:
     _logger.info("verify-proof: request received")
     scheme = (payload.scheme or "").strip()
-    # Backward compatible: allow scheme hint OR infer from publicSignals length.
-    # flexibleKyc (v2) publicSignals: 17 (includes nonce)
-    # flexibleKycCommitment (v2) publicSignals: 18 (includes nonce + commitment)
     is_commitment = scheme == "groth16-flexible-kyc-commitment" or len(payload.publicSignals) == 18
     vkey_path = FLEXIBLE_KYC_COMMITMENT_VKEY_PATH if is_commitment else FLEXIBLE_KYC_VKEY_PATH
 
@@ -202,52 +199,28 @@ async def verify_proof(payload: VerifyProofRequest) -> VerifyProofResponse:
         )
     except FileNotFoundError as exc:
         _logger.error("Verifier setup error — missing file: %s", exc)
-        raise HTTPException(
-            status_code=500,
-            detail="Verifier is not configured correctly. Contact the administrator.",
-        ) from exc
+        raise HTTPException(status_code=500, detail="Verifier is not configured correctly.") from exc
     except EnvironmentError as exc:
         _logger.error("Node.js not available: %s", exc)
-        raise HTTPException(
-            status_code=500,
-            detail="Proof verifier is unavailable. Contact the administrator.",
-        ) from exc
+        raise HTTPException(status_code=500, detail="Proof verifier unavailable.") from exc
     except subprocess.TimeoutExpired:
         _logger.error("Proof verification timed out")
-        raise HTTPException(
-            status_code=504,
-            detail="Proof verification timed out. Try again.",
-        )
+        raise HTTPException(status_code=504, detail="Verification timed out.")
     except RuntimeError as exc:
         _logger.error("Verifier subprocess error: %s", exc)
-        raise HTTPException(
-            status_code=500,
-            detail="Internal verifier error. Contact the administrator.",
-        ) from exc
+        raise HTTPException(status_code=500, detail="Internal verifier error.") from exc
 
     if result.error is not None:
         _logger.error("snark_verifier.js reported error: %s", result.error)
-        raise HTTPException(
-            status_code=500,
-            detail="Internal verifier error. Contact the administrator.",
-        )
-
-    _logger.info("Proof verification complete | valid=%s", result.valid)
+        raise HTTPException(status_code=500, detail="Internal verifier error.")
 
     if result.valid:
-        # Replay protection: if the request carries a nonce, enforce single-use.
-        # This prevents:
-        #  - proof replay within the same request
-        #  - cross-request reuse when a unique nonce is generated per request
         if expected_nonce:
             try:
                 fresh = try_mark_nonce_used(str(expected_nonce))
             except Exception:
-                _logger.exception("verify-proof: nonce replay store failed")
-                raise HTTPException(
-                    status_code=500,
-                    detail="Nonce replay protection is unavailable. Contact the administrator.",
-                )
+                _logger.exception("nonce replay store failed")
+                raise HTTPException(status_code=500, detail="Replay protection failed.")
 
             if not fresh:
                 return VerifyProofResponse(
@@ -258,3 +231,7 @@ async def verify_proof(payload: VerifyProofRequest) -> VerifyProofResponse:
         return VerifyProofResponse(verified=True, message="ZK proof verified.")
 
     return VerifyProofResponse(verified=False, message="ZK proof is invalid.")
+
+
+# ✅ INCLUDE ROUTER
+app.include_router(api)
