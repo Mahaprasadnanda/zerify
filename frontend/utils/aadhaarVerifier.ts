@@ -138,8 +138,8 @@ export async function verifyAadhaarSecureQr(
   const verifyDirect = await crypto.subtle.verify(
   { name: "RSASSA-PKCS1-v1_5" },
   importedKey.key,
-  parsed.signature.buffer,
-  parsed.signedData.buffer,
+  new Uint8Array(parsed.signature),
+  new Uint8Array(parsed.signedData),
 );
 
 const reversedSignature = reverseBytes(parsed.signature);
@@ -147,22 +147,22 @@ const reversedSignature = reverseBytes(parsed.signature);
 const verifyReversedSignature = await crypto.subtle.verify(
   { name: "RSASSA-PKCS1-v1_5" },
   importedKey.key,
-  reversedSignature.buffer,
-  parsed.signedData.buffer,
+  new Uint8Array(reversedSignature),
+  new Uint8Array(parsed.signedData),
 );
 
 const verifyDirectPayloadOnly = await crypto.subtle.verify(
   { name: "RSASSA-PKCS1-v1_5" },
   importedKey.key,
-  parsed.signature.buffer,
-  parsed.payloadOnlySignedData.buffer,
+  new Uint8Array(parsed.signature),
+  new Uint8Array(parsed.payloadOnlySignedData),
 );
 
 const verifyReversedSignaturePayloadOnly = await crypto.subtle.verify(
   { name: "RSASSA-PKCS1-v1_5" },
   importedKey.key,
-  reversedSignature.buffer,
-  parsed.payloadOnlySignedData.buffer,
+  new Uint8Array(reversedSignature),
+  new Uint8Array(parsed.payloadOnlySignedData),
 );
 
     let isValid = false;
