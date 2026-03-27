@@ -1,12 +1,13 @@
 import { groth16 } from "snarkjs";
 import { aadhaarGenderToCircuitCode, requiredGenderToCircuitCode } from "./gender.js";
 
-const FLEXIBLE_KYC_WASM_PATH = "/zkp/flexibleKyc/flexible_kyc.wasm";
-const FLEXIBLE_KYC_ZKEY_PATH = "/zkp/flexibleKyc/flexible_kyc_final.zkey";
-const FLEXIBLE_KYC_VKEY_PATH = "/zkp/flexibleKyc/flexible_kyc_verification_key.json";
-const FLEXIBLE_KYC_COMMITMENT_WASM_PATH = "/zkp/flexibleKycCommitment/flexible_kyc_commitment.wasm";
-const FLEXIBLE_KYC_COMMITMENT_ZKEY_PATH = "/zkp/flexibleKycCommitment/flexible_kyc_commitment_final.zkey";
-const FLEXIBLE_KYC_COMMITMENT_VKEY_PATH = "/zkp/flexibleKycCommitment/flexible_kyc_commitment_verification_key.json";
+const BASE = import.meta.env.BASE_URL || "/";
+const FLEXIBLE_KYC_WASM_PATH = `${BASE}zkp/flexibleKyc/flexible_kyc.wasm`;
+const FLEXIBLE_KYC_ZKEY_PATH = `${BASE}zkp/flexibleKyc/flexible_kyc_final.zkey`;
+const FLEXIBLE_KYC_VKEY_PATH = `${BASE}zkp/flexibleKyc/flexible_kyc_verification_key.json`;
+const FLEXIBLE_KYC_COMMITMENT_WASM_PATH = `${BASE}zkp/flexibleKycCommitment/flexible_kyc_commitment.wasm`;
+const FLEXIBLE_KYC_COMMITMENT_ZKEY_PATH = `${BASE}zkp/flexibleKycCommitment/flexible_kyc_commitment_final.zkey`;
+const FLEXIBLE_KYC_COMMITMENT_VKEY_PATH = `${BASE}zkp/flexibleKycCommitment/flexible_kyc_commitment_verification_key.json`;
 
 let poseidonPromise = null;
 // Ensure circomlibjs poseidon internals can use `buffer` in-browser.

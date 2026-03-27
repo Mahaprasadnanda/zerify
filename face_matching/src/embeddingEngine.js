@@ -40,7 +40,8 @@ export class EmbeddingEngine {
     } catch {
       // Attempt 2: point to local WASM files explicitly
       try {
-        ort.env.wasm.wasmPaths = '/wasm/';
+        const base = (import.meta?.env?.BASE_URL || "/").replace(/\/?$/, "/");
+        ort.env.wasm.wasmPaths = `${base}wasm/`;
         this.#session = await ort.InferenceSession.create(modelUrl, {
           executionProviders: ['wasm'],
           graphOptimizationLevel: 'all',

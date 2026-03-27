@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+  // Served behind Next.js/Nginx under /prover/
+  base: '/prover/',
   optimizeDeps: {
     exclude: ['onnxruntime-web'],
   },

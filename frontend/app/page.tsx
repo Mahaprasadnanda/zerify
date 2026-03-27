@@ -14,13 +14,14 @@ export default function HomePage() {
 
           <h1 className="pb-2 text-4xl font-semibold leading-[1.26] tracking-tight text-slate-50 md:text-6xl md:leading-[1.2]">
             Verify identity
-            <span className="block pb-1 leading-[1.26] md:leading-[1.2] bg-gradient-to-r from-sky-300 via-slate-50 to-indigo-300 bg-clip-text text-transparent">
+            <span className="block pb-1 bg-gradient-to-r from-sky-300 via-slate-50 to-indigo-300 bg-clip-text leading-[1.26] text-transparent md:leading-[1.2]">
               without revealing personal data.
             </span>
           </h1>
 
           <p className="max-w-3xl text-lg leading-8 text-slate-300">
-            Zerify now runs as two-site architecture: this frontend is for verifier and request launch, and the dedicated prover app handles Aadhaar upload, QR decode, liveness, face matching, and proof submission.
+            Zerify now runs as two-site architecture: this frontend is for verifier and request launch, and the dedicated prover
+            app handles Aadhaar upload, QR decode, liveness, face matching, and proof submission.
           </p>
 
           <div className="flex flex-col gap-3 sm:flex-row">
@@ -67,7 +68,17 @@ export default function HomePage() {
               href="mailto:tandav2026@gmail.com"
               className="inline-flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/30 px-3 py-2 text-slate-200 transition hover:border-sky-400/50 hover:text-sky-200"
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
                 <path d="M4 4h16v16H4z" />
                 <path d="m4 7 8 6 8-6" />
               </svg>

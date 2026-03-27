@@ -323,9 +323,10 @@ async function init() {
     handoffContext.textContent = `Request: ${requestId || "-"} · User: ${handoffPhone || sessionPhone || "-"}`;
     await loadRequestContext();
     updateLivenessEnablement();
-    await loadFaceApiModels("/models/face-api");
+    const base = import.meta.env.BASE_URL || "/";
+    await loadFaceApiModels(`${base}models/face-api`);
     embeddingEngine = new EmbeddingEngine();
-    const onnxOk = await embeddingEngine.load("/models/mobilefacenet.onnx");
+    const onnxOk = await embeddingEngine.load(`${base}models/mobilefacenet.onnx`);
     modelType = onnxOk ? "arcface" : "faceapi";
     // Model badge intentionally hidden for cleaner UX.
     if (modelBadge) {
@@ -343,15 +344,21 @@ function resolveReturnUrl() {
   const stored = sessionStorage.getItem(RETURN_URL_KEY) || "";
   if (stored) return stored;
 
+  // Optional explicit verifier URL (production-safe, no localhost defaults)
+  // Example: VITE_VERIFIER_URL=https://app.zerify.tech
+  try {
+    const envUrl = import.meta?.env?.VITE_VERIFIER_URL;
+    if (typeof envUrl === "string" && envUrl.trim()) return envUrl.trim();
+  } catch {
+    // ignore
+  }
+
   const ref = document.referrer || "";
   // If user came from another site/port, referrer is a good fallback.
   if (ref) return ref;
 
-  // Final fallback: assume verifier frontend is on same host at :3000
-  // and its launcher page is /prover.
-  const proto = window.location.protocol || "http:";
-  const host = window.location.hostname || "localhost";
-  return `${proto}//${host}:3000/prover`;
+  // Final fallback: same origin (no hardcoded port/path).
+  return window.location.origin;
 }
 
 btnLogout?.addEventListener("click", () => {
