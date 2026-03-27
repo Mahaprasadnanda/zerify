@@ -1,0 +1,13 @@
+**/node_modules
+**/.next
+**/dist
+**/.vite
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+.git
+.gitignore
+npm-debug.log*
+yarn-error.log*
+.DS_Store
