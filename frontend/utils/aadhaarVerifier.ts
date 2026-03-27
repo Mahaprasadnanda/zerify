@@ -135,34 +135,35 @@ export async function verifyAadhaarSecureQr(
       ? certValidTo < referenceTime
       : undefined;
 
-    const verifyDirect = await crypto.subtle.verify(
-      { name: "RSASSA-PKCS1-v1_5" },
-      importedKey.key,
-      parsed.signature,
-      parsed.signedData,
-    );
+  const verifyDirect = await crypto.subtle.verify(
+  { name: "RSASSA-PKCS1-v1_5" },
+  importedKey.key,
+  parsed.signature.buffer,
+  parsed.signedData.buffer,
+);
 
-    const reversedSignature = reverseBytes(parsed.signature);
-    const verifyReversedSignature = await crypto.subtle.verify(
-      { name: "RSASSA-PKCS1-v1_5" },
-      importedKey.key,
-      reversedSignature,
-      parsed.signedData,
-    );
+const reversedSignature = reverseBytes(parsed.signature);
 
-    const verifyDirectPayloadOnly = await crypto.subtle.verify(
-      { name: "RSASSA-PKCS1-v1_5" },
-      importedKey.key,
-      parsed.signature,
-      parsed.payloadOnlySignedData,
-    );
+const verifyReversedSignature = await crypto.subtle.verify(
+  { name: "RSASSA-PKCS1-v1_5" },
+  importedKey.key,
+  reversedSignature.buffer,
+  parsed.signedData.buffer,
+);
 
-    const verifyReversedSignaturePayloadOnly = await crypto.subtle.verify(
-      { name: "RSASSA-PKCS1-v1_5" },
-      importedKey.key,
-      reversedSignature,
-      parsed.payloadOnlySignedData,
-    );
+const verifyDirectPayloadOnly = await crypto.subtle.verify(
+  { name: "RSASSA-PKCS1-v1_5" },
+  importedKey.key,
+  parsed.signature.buffer,
+  parsed.payloadOnlySignedData.buffer,
+);
+
+const verifyReversedSignaturePayloadOnly = await crypto.subtle.verify(
+  { name: "RSASSA-PKCS1-v1_5" },
+  importedKey.key,
+  reversedSignature.buffer,
+  parsed.payloadOnlySignedData.buffer,
+);
 
     let isValid = false;
     let selectedStrategy = "none";
