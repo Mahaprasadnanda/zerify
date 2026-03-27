@@ -23,6 +23,37 @@ function normalizeToE164India(raw: string): string {
   throw new Error("Invalid phone number.");
 }
 
+function formatTwilioError(e: unknown): {
+  message: string;
+  status?: number;
+  code?: number | string;
+  moreInfo?: string;
+  details?: unknown;
+} {
+  if (e && typeof e === "object") {
+    const anyE = e as {
+      message?: unknown;
+      status?: unknown;
+      code?: unknown;
+      moreInfo?: unknown;
+      details?: unknown;
+      more_info?: unknown;
+    };
+    const message = typeof anyE.message === "string" ? anyE.message : "Twilio request failed";
+    const status = typeof anyE.status === "number" ? anyE.status : undefined;
+    const code =
+      typeof anyE.code === "number" || typeof anyE.code === "string" ? anyE.code : undefined;
+    const moreInfo =
+      typeof anyE.moreInfo === "string"
+        ? anyE.moreInfo
+        : typeof anyE.more_info === "string"
+          ? anyE.more_info
+          : undefined;
+    return { message, status, code, moreInfo, details: anyE.details };
+  }
+  return { message: e instanceof Error ? e.message : "Twilio request failed" };
+}
+
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as { phone?: string };
@@ -65,8 +96,22 @@ export async function POST(req: Request) {
       retryAfterSec: 60,
     });
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Failed to send OTP";
-    return NextResponse.json({ ok: false, message }, { status: 500 });
+    const err = formatTwilioError(e);
+    // Server-side log for debugging (no sensitive data like auth token is included).
+    console.error("Twilio OTP send failed", err);
+    return NextResponse.json(
+      {
+        ok: false,
+        message: err.message,
+        twilio: {
+          status: err.status,
+          code: err.code,
+          moreInfo: err.moreInfo,
+          details: err.details,
+        },
+      },
+      { status: 500 },
+    );
   }
 }
 

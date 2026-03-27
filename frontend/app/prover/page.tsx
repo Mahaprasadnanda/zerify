@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { onValue, ref } from "firebase/database";
+import { get, onValue, ref } from "firebase/database";
 import { firebaseDb } from "@/lib/firebaseClient";
 
 const STORAGE_KEYS = {
@@ -26,11 +26,31 @@ export default function ProverPage() {
 
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEYS.userSession);
+      const raw = sessionStorage.getItem(STORAGE_KEYS.userSession) ?? localStorage.getItem(STORAGE_KEYS.userSession);
       if (raw) setSession(JSON.parse(raw) as UserSession);
+      if (raw) {
+        // Migrate legacy persistent session into tab-scoped session.
+        sessionStorage.setItem(STORAGE_KEYS.userSession, raw);
+        localStorage.removeItem(STORAGE_KEYS.userSession);
+      }
     } catch {
       setSession(null);
     }
+  }, []);
+
+  // Prevent stale bfcache state showing authenticated UI after logout/tab close.
+  useEffect(() => {
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (!e.persisted) return;
+      try {
+        const raw = sessionStorage.getItem(STORAGE_KEYS.userSession);
+        setSession(raw ? (JSON.parse(raw) as UserSession) : null);
+      } catch {
+        setSession(null);
+      }
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
   }, []);
 
   useEffect(() => {
@@ -51,7 +71,16 @@ export default function ProverPage() {
         createdAt: val[requestId]?.createdAt,
       }));
       rows.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
-      setRequestSummaries(rows);
+      // Defensive UI guard: if index is stale but kycRequests entry is deleted, hide it.
+      void (async () => {
+        const checks = await Promise.all(
+          rows.map(async (r) => {
+            const exists = (await get(ref(firebaseDb, `kycRequests/${r.requestId}`))).exists();
+            return { r, exists };
+          }),
+        );
+        setRequestSummaries(checks.filter((x) => x.exists).map((x) => x.r));
+      })();
     });
   }, [session?.phone]);
 
@@ -110,7 +139,7 @@ export default function ProverPage() {
     u.searchParams.set("phone", session.phone);
     u.searchParams.set("return_url", window.location.href);
     try {
-      const raw = localStorage.getItem(STORAGE_KEYS.userSession);
+      const raw = sessionStorage.getItem(STORAGE_KEYS.userSession) ?? localStorage.getItem(STORAGE_KEYS.userSession);
       if (raw) {
         const token = btoa(unescape(encodeURIComponent(raw)))
           .replace(/\+/g, "-")
@@ -129,12 +158,12 @@ export default function ProverPage() {
       <div className="pointer-events-none absolute -top-52 left-1/2 h-[520px] w-[980px] -translate-x-1/2 rounded-full glow-orb opacity-80" />
       <div className="pointer-events-none absolute inset-0 noise" />
 
-      <div className="relative mx-auto w-full max-w-6xl px-6 py-14">
+      <div className="relative mx-auto w-full max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
         <header className="mb-10">
           <div className="inline-flex w-fit items-center gap-2 rounded-full border border-slate-800 bg-slate-950/40 px-4 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-slate-200 shadow-soft">
             Zerify • Prover Launcher
           </div>
-          <h1 className="mt-4 text-4xl font-semibold tracking-tight text-slate-50">
+          <h1 className="mt-4 text-3xl font-semibold tracking-tight text-slate-50 md:text-4xl">
             Your KYC requests
           </h1>
           <p className="mt-2 text-base text-slate-300">
@@ -166,16 +195,18 @@ export default function ProverPage() {
                 type="button"
                 className="rounded-2xl border border-slate-800 bg-slate-950/30 px-4 py-2 text-sm font-semibold text-slate-100 hover:border-slate-700"
                 onClick={() => {
+                  sessionStorage.removeItem(STORAGE_KEYS.userSession);
                   localStorage.removeItem(STORAGE_KEYS.userSession);
                   setSession(null);
                   setRequestSummaries([]);
+                  window.location.replace("/user/login");
                 }}
               >
                 Logout
               </button>
             </div>
 
-            <div className="mt-6 overflow-hidden rounded-2xl border border-slate-800">
+            <div className="mt-6 overflow-x-auto rounded-2xl border border-slate-800">
               <table className="w-full text-left text-sm">
                 <thead className="bg-slate-950/50 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
                   <tr>

@@ -29,6 +29,10 @@
       <div id="qr-gate-note" class="upload-hint" style="margin-top:8px;">
         Upload Aadhaar image to run QR decode + UIDAI signature + constraints checks.
       </div>
+      <div id="verifier-proof-status" class="verifier-proof-status">
+        <h3>Verifier Proof Verification Status</h3>
+        <div id="verifier-proof-status-rows" class="verifier-proof-status-rows"></div>
+      </div>
     </section>
 
     <div id="status-bar">
@@ -61,6 +65,9 @@
             <button id="btn-liveness" class="secondary" type="button">Run Liveness Check</button>
             <button id="btn-retake" class="secondary hidden">Retake</button>
             <button id="btn-confirm" class="success hidden">Confirm</button>
+          </div>
+          <div id="liveness-instruction" class="liveness-instruction">
+            Complete QR checks to unlock liveness.
           </div>
           <div id="liveness-note" class="upload-hint" style="margin-top:8px;">Complete liveness check before capture.</div>
           <div id="frames-preview" class="frames hidden">
@@ -101,15 +108,15 @@
                 <span class="qr-check-label">UIDAI signature</span>
                 <span id="qr-uidai-status" class="qr-check-value">—</span>
               </div>
-              <div class="qr-check-row">
+              <div id="qr-age-row" class="qr-check-row">
                 <span class="qr-check-label">Age</span>
                 <span id="qr-age-status" class="qr-check-value">—</span>
               </div>
-              <div class="qr-check-row">
+              <div id="qr-gender-row" class="qr-check-row">
                 <span class="qr-check-label">Gender</span>
                 <span id="qr-gender-status" class="qr-check-value">—</span>
               </div>
-              <div class="qr-check-row">
+              <div id="qr-address-row" class="qr-check-row">
                 <span class="qr-check-label">Address / Pincode</span>
                 <span id="qr-address-status" class="qr-check-value">—</span>
               </div>

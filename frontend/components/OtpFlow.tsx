@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { sendOtp, verifyOtp } from "@/lib/otpClient";
 
 type Props = {
@@ -78,6 +78,17 @@ export function OtpFlow({ title, subtitle, primaryCtaLabel, onVerified }: Props)
     }
   };
 
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (busy) return;
+    if (phase === "phone") {
+      if (!phoneE164) return;
+      await handleSend();
+      return;
+    }
+    await handleVerify();
+  };
+
   return (
     <div className="gradient-border">
       <section className="card-glass rounded-[2rem] border border-slate-800/70 p-8 shadow-soft md:p-10">
@@ -86,7 +97,7 @@ export function OtpFlow({ title, subtitle, primaryCtaLabel, onVerified }: Props)
         </h1>
         <p className="mt-3 text-base leading-7 text-slate-300">{subtitle}</p>
 
-        <div className="mt-7 grid gap-4">
+        <form className="mt-7 grid gap-4" onSubmit={handleSubmit}>
           {phase === "phone" ? (
             <>
               <label className="grid gap-2">
@@ -106,10 +117,9 @@ export function OtpFlow({ title, subtitle, primaryCtaLabel, onVerified }: Props)
               </label>
 
               <button
-                type="button"
+                type="submit"
                 className="btn-primary shimmer inline-flex w-full items-center justify-center gap-2 rounded-2xl px-6 py-4 text-base font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
                 disabled={busy || !phoneE164}
-                onClick={handleSend}
               >
                 {busy ? <Spinner /> : null}
                 Send OTP
@@ -136,10 +146,9 @@ export function OtpFlow({ title, subtitle, primaryCtaLabel, onVerified }: Props)
               </label>
 
               <button
-                type="button"
+                type="submit"
                 className="btn-primary shimmer inline-flex w-full items-center justify-center gap-2 rounded-2xl px-6 py-4 text-base font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
                 disabled={busy}
-                onClick={handleVerify}
               >
                 {busy ? <Spinner /> : null}
                 {primaryCtaLabel}
@@ -176,7 +185,7 @@ export function OtpFlow({ title, subtitle, primaryCtaLabel, onVerified }: Props)
               {error}
             </div>
           ) : null}
-        </div>
+        </form>
       </section>
     </div>
   );

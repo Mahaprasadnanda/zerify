@@ -1,4 +1,4 @@
-import { get, ref, update } from "firebase/database";
+import { get, onValue, ref, update } from "firebase/database";
 import { Buffer } from "buffer";
 import { Camera } from "./camera.js";
 import { loadFaceApiModels, detectAndExtractFace } from "./faceProcessor.js";
@@ -37,6 +37,7 @@ const btnLiveness = $("btn-liveness");
 const btnRetake = $("btn-retake");
 const btnConfirm = $("btn-confirm");
 const livenessNote = $("liveness-note");
+const livenessInstruction = $("liveness-instruction");
 const framesPreview = $("frames-preview");
 const framesGrid = framesPreview?.querySelector(".frames-grid");
 const aadhaarInput = $("aadhaar-input");
@@ -65,11 +66,15 @@ const requestMeta = $("request-meta");
 const constraintPills = $("constraint-pills");
 const purposeLine = $("purpose-line");
 const qrGateNote = $("qr-gate-note");
+const verifierProofStatusRows = $("verifier-proof-status-rows");
 const qrChecks = $("qr-checks");
 const qrUidaiStatus = $("qr-uidai-status");
 const qrAgeStatus = $("qr-age-status");
 const qrGenderStatus = $("qr-gender-status");
 const qrAddressStatus = $("qr-address-status");
+const qrAgeRow = $("qr-age-row");
+const qrGenderRow = $("qr-gender-row");
+const qrAddressRow = $("qr-address-row");
 const qrExtractedLine = $("qr-extracted-line");
 const qrChecksStatusNote = $("qr-checks-status-note");
 const btnLogout = $("btn-logout");
@@ -99,6 +104,7 @@ let aadhaarEmbedding = null;
 let aadhaarObjectUrl = null;
 let lastAadhaarFile = null;
 let extractedFields = null;
+let verificationUnsub = null;
 
 function setProofNote(kind, text) {
   if (!proofNote) return;
@@ -158,6 +164,20 @@ function updateLivenessEnablement() {
   livenessNote.textContent = qrAndConstraintsPassed
     ? "Liveness unlocked. Run liveness check until criteria are met."
     : "Complete QR+constraints checks first.";
+  if (livenessInstruction) {
+    livenessInstruction.classList.remove("success", "warn");
+    livenessInstruction.textContent = qrAndConstraintsPassed
+      ? "Ready: Look straight, then turn LEFT, RIGHT, and BLINK."
+      : "Complete QR checks to unlock liveness.";
+  }
+}
+
+function setLivenessInstruction(text, tone = "normal") {
+  if (!livenessInstruction) return;
+  livenessInstruction.classList.remove("success", "warn");
+  if (tone === "success") livenessInstruction.classList.add("success");
+  if (tone === "warn") livenessInstruction.classList.add("warn");
+  livenessInstruction.textContent = text;
 }
 
 function setQrStatus(el, ok) {
@@ -171,6 +191,75 @@ function setQrStatus(el, ok) {
   el.textContent = ok ? "PASS" : "FAIL";
   el.classList.remove("pass", "fail", "pending");
   el.classList.add(ok ? "pass" : "fail");
+}
+
+function setConstraintRowsVisibility() {
+  const checks = requestCtx?.checks ?? [];
+  const showAge = checks.includes("age");
+  const showGender = checks.includes("gender");
+  const showAddress = checks.includes("address");
+  if (qrAgeRow) qrAgeRow.classList.toggle("hidden", !showAge);
+  if (qrGenderRow) qrGenderRow.classList.toggle("hidden", !showGender);
+  if (qrAddressRow) qrAddressRow.classList.toggle("hidden", !showAddress);
+}
+
+function createVerifierStatusRow(label, value) {
+  const row = document.createElement("div");
+  row.className = "verifier-proof-status-row";
+  const left = document.createElement("span");
+  left.className = "label";
+  left.textContent = label;
+  const right = document.createElement("span");
+  right.className = "value";
+  if (value === true) {
+    right.textContent = "PASSED";
+    right.classList.add("passed");
+  } else if (value === false) {
+    right.textContent = "FAILED";
+    right.classList.add("failed");
+  } else {
+    right.textContent = "PENDING";
+    right.classList.add("pending");
+  }
+  row.appendChild(left);
+  row.appendChild(right);
+  return row;
+}
+
+function renderVerifierStatus(verification) {
+  if (!verifierProofStatusRows) return;
+  verifierProofStatusRows.innerHTML = "";
+  const checks = requestCtx?.checks ?? [];
+  const byCheck = {
+    age: verification?.ageVerified ?? null,
+    gender: verification?.genderVerified ?? null,
+    address: verification?.addressVerified ?? null,
+  };
+  const labels = {
+    age: "Age",
+    gender: "Gender",
+    address: "Address",
+  };
+  for (const check of checks) {
+    verifierProofStatusRows.appendChild(
+      createVerifierStatusRow(labels[check] ?? check, byCheck[check]),
+    );
+  }
+  if (checks.length === 0) {
+    verifierProofStatusRows.appendChild(createVerifierStatusRow("Verification", null));
+  }
+}
+
+function subscribeVerificationStatus() {
+  if (verificationUnsub) {
+    verificationUnsub();
+    verificationUnsub = null;
+  }
+  if (!requestCtx?.requestId || !sessionPhone) return;
+  const vRef = ref(firebaseDb, `kycRequests/${requestCtx.requestId}/users/${sessionPhone}/verification`);
+  verificationUnsub = onValue(vRef, (snap) => {
+    renderVerifierStatus(snap.exists() ? snap.val() : null);
+  });
 }
 
 async function loadRequestContext() {
@@ -201,18 +290,36 @@ async function loadRequestContext() {
   if (requestCtx.checks.includes("gender") && requestCtx.constraints.requiredGender) pills.push(`Gender = ${requestCtx.constraints.requiredGender}`);
   if (requestCtx.checks.includes("address") && requestCtx.constraints.pincodes?.length) pills.push(`Pincode in {${requestCtx.constraints.pincodes.join(", ")}}`);
   constraintPills.textContent = pills.join(" | ") || "No verifier constraints";
+  setConstraintRowsVisibility();
   if (purposeLine) {
     purposeLine.textContent = requestCtx.purpose ? `Purpose: ${requestCtx.purpose}` : "";
     purposeLine.classList.toggle("hidden", !requestCtx.purpose);
   }
+  renderVerifierStatus(null);
+  subscribeVerificationStatus();
 }
 
 async function init() {
   try {
     if (returnUrlParam) sessionStorage.setItem(RETURN_URL_KEY, returnUrlParam);
-    if (sessionToken) localStorage.setItem(STORAGE_KEY, decodeSessionToken(sessionToken));
-    const raw = localStorage.getItem(STORAGE_KEY);
+    if (sessionToken) {
+      const decoded = decodeSessionToken(sessionToken);
+      sessionStorage.setItem(STORAGE_KEY, decoded);
+      localStorage.removeItem(STORAGE_KEY);
+    }
+    const raw = sessionStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      // Migrate legacy persistent session into tab-scoped session.
+      sessionStorage.setItem(STORAGE_KEY, raw);
+      localStorage.removeItem(STORAGE_KEY);
+    }
     sessionPhone = raw ? JSON.parse(raw).phone ?? null : null;
+    if (!sessionPhone) {
+      // Block access when no active authenticated prover session exists.
+      const target = resolveReturnUrl();
+      window.location.replace(target);
+      return;
+    }
     handoffContext.textContent = `Request: ${requestId || "-"} · User: ${handoffPhone || sessionPhone || "-"}`;
     await loadRequestContext();
     updateLivenessEnablement();
@@ -250,6 +357,7 @@ function resolveReturnUrl() {
 btnLogout?.addEventListener("click", () => {
   const target = resolveReturnUrl();
   try {
+    sessionStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(STORAGE_KEY);
   } catch {}
   try {
@@ -264,10 +372,10 @@ async function runLivenessCheckUntilCriteriaPassed() {
   // Keep sampling until left + right + blink are detected,
   // with a safety timeout to avoid infinite loops.
   const maxMs = 45_000;
-  const sampleEveryMs = 300;
+  const sampleEveryMs = 220;
   const capturedTarget = 5;
 
-  const baselineSamples = 6;
+  const baselineSamples = 4;
   let baselineOffsets = [];
   let baseline = null;
 
@@ -277,14 +385,14 @@ async function runLivenessCheckUntilCriteriaPassed() {
   let blinkStreak = 0;
 
   const blinkThreshold = 0.26;
-  const leftRightDelta = 0.045;
+  const leftRightDelta = 0.035;
 
   let captured = [];
 
   const started = performance.now();
   while (performance.now() - started < maxMs) {
     const frame = camera.captureFrame();
-    const det = await detectAndExtractFace(frame, 0.45, 0.18);
+    const det = await detectAndExtractFace(frame, 0.4, 0.18);
 
     if (det?.keypoints && det?.keypoints?.length >= 3) {
       const l = det.keypoints[0]?.[0];
@@ -331,6 +439,11 @@ async function runLivenessCheckUntilCriteriaPassed() {
     else if (!blinkDetected) msg = "Liveness: blink";
     else msg = "Liveness: criteria met";
     setProgress(pct, msg);
+    if (baseline === null) setLivenessInstruction("LOOK STRAIGHT", "warn");
+    else if (!turnedLeft) setLivenessInstruction("TURN LEFT", "warn");
+    else if (!turnedRight) setLivenessInstruction("TURN RIGHT", "warn");
+    else if (!blinkDetected) setLivenessInstruction("BLINK", "warn");
+    else setLivenessInstruction("CRITERIA MET", "success");
 
     if (baseline !== null && turnedLeft && turnedRight && blinkDetected && captured.length >= capturedTarget) {
       break;
@@ -381,8 +494,10 @@ btnLiveness.addEventListener("click", async () => {
     const frames = await runLivenessCheckUntilCriteriaPassed();
     await processCapturedFrames(frames);
     livenessPassed = true;
+    setLivenessInstruction("LIVENESS PASSED", "success");
     setProgress(100, "Liveness passed. Click Confirm or Retake.");
   } catch (err) {
+    setLivenessInstruction("Retry liveness. Follow prompts exactly.", "warn");
     setProgress(100, err.message);
   }
 });
@@ -399,6 +514,7 @@ btnRetake.addEventListener("click", () => {
   cameraOverlay.classList.add("hidden");
   resultSection.classList.add("hidden");
   videoEl.play();
+  setLivenessInstruction("Ready: Look straight, then turn LEFT, RIGHT, and BLINK.");
   checkCompareReady();
 });
 
@@ -451,12 +567,18 @@ async function processAadhaarFile(file) {
     extractedFields = { name: name ?? "—", dob, gender, address };
     const checks = requestCtx?.checks ?? [];
     const constraints = requestCtx?.constraints ?? { minAge: 18, requiredGender: "", pincodes: [] };
-    const agePass = checks.includes("age") ? computeAgeFromDob(dob) >= constraints.minAge : true;
-    const genderPass = checks.includes("gender") ? gendersMatch(gender, constraints.requiredGender) : true;
-    const addressPass = checks.includes("address")
+    const ageEnabled = checks.includes("age");
+    const genderEnabled = checks.includes("gender");
+    const addressEnabled = checks.includes("address");
+    const agePass = ageEnabled ? computeAgeFromDob(dob) >= constraints.minAge : null;
+    const genderPass = genderEnabled ? gendersMatch(gender, constraints.requiredGender) : null;
+    const addressPass = addressEnabled
       ? addressMatchesAnyAllowedPincode(address, constraints.pincodes)
-      : true;
-    qrAndConstraintsPassed = agePass && genderPass && addressPass;
+      : null;
+    qrAndConstraintsPassed =
+      (!ageEnabled || agePass === true) &&
+      (!genderEnabled || genderPass === true) &&
+      (!addressEnabled || addressPass === true);
     qrChecks.classList.remove("hidden");
 
     setQrStatus(qrUidaiStatus, true); // UIDAI signature already verified by `verification.isValid`
@@ -715,6 +837,7 @@ async function sha256Hex(value) {
 
 window.addEventListener("beforeunload", () => {
   try { camera?.stop(); } catch {}
+  try { verificationUnsub?.(); } catch {}
 });
 
 init();

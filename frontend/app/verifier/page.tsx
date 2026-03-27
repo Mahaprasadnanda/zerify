@@ -6,7 +6,7 @@ import {
   signOut,
   type User as FirebaseUser,
 } from "firebase/auth";
-import { onValue, ref, set, update } from "firebase/database";
+import { get, onValue, ref, set, update } from "firebase/database";
 import { firebaseAuth, firebaseAuthPersistenceReady, firebaseDb } from "@/lib/firebaseClient";
 import { verifyProof } from "@/lib/api";
 import { onAuthStateChanged } from "firebase/auth";
@@ -245,7 +245,7 @@ export default function VerifierPage() {
   const [minAge, setMinAge] = useState(18);
   const [requiredGender, setRequiredGender] = useState<KycConstraints["requiredGender"]>("");
   const [purpose, setPurpose] = useState("");
-  const [requireCommitment, setRequireCommitment] = useState(false);
+  const requireCommitment = true;
   const [pincodeInput, setPincodeInput] = useState("");
   const [pincodes, setPincodes] = useState<string[]>([]);
   const [mobilesInput, setMobilesInput] = useState("");
@@ -455,14 +455,35 @@ export default function VerifierPage() {
         "Saving recipient records",
       );
 
+      // 5) Notify recipients via SMS (non-blocking)
+      setSendStage("Sending SMS notifications...");
+      try {
+        const res = await fetch("/api/sms/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phones: phoneNumbers, requestId }),
+        });
+        const data = (await res.json()) as { ok?: boolean; sentCount?: number; message?: string };
+        if (!res.ok || !data.ok) {
+          // Do not block request creation if SMS fails.
+          setSendSuccess(
+            `Request ${requestId} saved. SMS failed (you can still proceed via prover dashboard).`,
+          );
+        } else {
+          setSendSuccess(
+            `Request ${requestId} saved. SMS sent to ${data.sentCount ?? phoneNumbers.length} recipient(s).`,
+          );
+        }
+      } catch {
+        setSendSuccess(
+          `Request ${requestId} saved. SMS failed (you can still proceed via prover dashboard).`,
+        );
+      }
+
       setMobilesInput("");
       setPincodes([]);
       setPincodeInput("");
       setPurpose("");
-      setRequireCommitment(false);
-      setSendSuccess(
-        `Request ${requestId} saved. Recipients can open it from their prover dashboard after logging in with the same number (no SMS for now).`,
-      );
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to send request";
       const isTimeout = /timed out/i.test(msg);
@@ -490,6 +511,16 @@ export default function VerifierPage() {
     setVerifyBusyPhone(phone);
     const now = Date.now();
     const prevTimes = userState.verification.verifiedAtByAttribute || {};
+    const alreadyVerifiedByYou =
+      (!request.checks.includes("age") || userState.verification.ageVerified === true) &&
+      (!request.checks.includes("gender") || userState.verification.genderVerified === true) &&
+      (!request.checks.includes("address") || userState.verification.addressVerified === true);
+
+    if (alreadyVerifiedByYou) {
+      setVerifyBusyPhone(null);
+      setVerifyError("Prover already verified by you");
+      return;
+    }
 
     try {
       const res = await verifyProof({
@@ -522,15 +553,16 @@ export default function VerifierPage() {
 
       const ok = res.verified;
       if (request.checks.includes("age")) {
-        toUpdate.ageVerified = ok;
+        // Keep verified status sticky once true; replay/temporary failures should not downgrade.
+        toUpdate.ageVerified = userState.verification.ageVerified === true ? true : ok;
         if (ok) toUpdate.verifiedAtByAttribute!.age = now;
       }
       if (request.checks.includes("gender")) {
-        toUpdate.genderVerified = ok;
+        toUpdate.genderVerified = userState.verification.genderVerified === true ? true : ok;
         if (ok) toUpdate.verifiedAtByAttribute!.gender = now;
       }
       if (request.checks.includes("address")) {
-        toUpdate.addressVerified = ok;
+        toUpdate.addressVerified = userState.verification.addressVerified === true ? true : ok;
         if (ok) toUpdate.verifiedAtByAttribute!.address = now;
       }
 
@@ -552,7 +584,16 @@ export default function VerifierPage() {
       }
 
       if (!ok) {
-        setVerifyError(res.message || "Backend rejected the proof.");
+        const replayDetected = /nonce already used|replay/i.test(res.message || "");
+        const nowVerifiedByYou =
+          (!request.checks.includes("age") || toUpdate.ageVerified === true) &&
+          (!request.checks.includes("gender") || toUpdate.genderVerified === true) &&
+          (!request.checks.includes("address") || toUpdate.addressVerified === true);
+        if (replayDetected && nowVerifiedByYou) {
+          setVerifyError("Prover already verified by you");
+        } else {
+          setVerifyError(res.message || "Backend rejected the proof.");
+        }
       }
     } catch (e) {
       setVerifyError(e instanceof Error ? e.message : "Verification request failed.");
@@ -581,7 +622,21 @@ export default function VerifierPage() {
         [`${INDICES.verifier(authUser.uid)}/${request.requestId}`]: null,
       };
       for (const phone of Object.keys(request.users ?? {})) {
+        const digits = phone.replace(/\D/g, "");
         updates[`${INDICES.user(phone)}/${request.requestId}`] = null;
+        // Defensive cleanup for legacy/mismatched key formats.
+        if (digits) updates[`${INDICES.user(digits)}/${request.requestId}`] = null;
+        if (digits.length === 10) updates[`${INDICES.user(`+91${digits}`)}/${request.requestId}`] = null;
+      }
+      // Extra safety: remove any stale user index row anywhere that points to this request.
+      const userIdxSnap = await get(ref(firebaseDb, "indices/userRequests"));
+      if (userIdxSnap.exists()) {
+        const allUserIdx = userIdxSnap.val() as Record<string, Record<string, unknown> | null>;
+        for (const phoneKey of Object.keys(allUserIdx ?? {})) {
+          if (allUserIdx[phoneKey] && Object.prototype.hasOwnProperty.call(allUserIdx[phoneKey]!, request.requestId)) {
+            updates[`indices/userRequests/${phoneKey}/${request.requestId}`] = null;
+          }
+        }
       }
       await withTimeout(update(ref(firebaseDb), updates), 20000, "Deleting KYC request");
       setDeleteSuccess(`Request ${request.requestId} deleted.`);
@@ -599,7 +654,7 @@ export default function VerifierPage() {
       <main className="min-h-screen surface">
         <div className="pointer-events-none absolute -top-52 left-1/2 h-[520px] w-[980px] -translate-x-1/2 rounded-full glow-orb opacity-80" />
         <div className="pointer-events-none absolute inset-0 noise" />
-        <div className="relative mx-auto w-full max-w-4xl px-6 py-16">
+        <div className="relative mx-auto w-full max-w-4xl px-4 py-10 sm:px-6 sm:py-16">
           <section className="gradient-border">
             <div className="card-glass rounded-[2rem] border border-slate-800/70 p-8 shadow-soft md:p-10">
               <h1 className="text-3xl font-semibold tracking-tight text-slate-50">Verifier login</h1>
@@ -624,7 +679,14 @@ export default function VerifierPage() {
 
               {showLogin ? (
                 <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/30 p-6">
-                  <div className="grid gap-3">
+                  <form
+                    className="grid gap-3"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (!email.trim() || !password.trim()) return;
+                      void handleLogin();
+                    }}
+                  >
                     <label className="grid gap-2">
                       <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Email</span>
                       <input
@@ -648,13 +710,13 @@ export default function VerifierPage() {
                       </div>
                     ) : null}
                     <button
+                      type="submit"
                       className="btn-primary shimmer rounded-2xl px-6 py-4 text-base font-semibold text-slate-950"
-                      onClick={handleLogin}
                       disabled={!email.trim() || !password.trim()}
                     >
                       Login
                     </button>
-                  </div>
+                  </form>
                 </div>
               ) : null}
             </div>
@@ -669,13 +731,13 @@ export default function VerifierPage() {
       <div className="pointer-events-none absolute -top-52 left-1/2 h-[520px] w-[980px] -translate-x-1/2 rounded-full glow-orb opacity-80" />
       <div className="pointer-events-none absolute inset-0 noise" />
 
-      <div className="relative mx-auto w-full max-w-6xl px-6 py-14">
+      <div className="relative mx-auto w-full max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
         <header className="mb-10 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div className="space-y-2">
             <div className="inline-flex w-fit items-center gap-2 rounded-full border border-slate-800 bg-slate-950/40 px-4 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-slate-200 shadow-soft">
               Zerify • Verifier
             </div>
-            <h1 className="text-4xl font-semibold tracking-tight text-slate-50">Request & result dashboard</h1>
+            <h1 className="text-3xl font-semibold tracking-tight text-slate-50 md:text-4xl">Request & result dashboard</h1>
             <p className="text-base text-slate-300">
               Build KYC constraints, add recipient numbers (saved to Firebase). Provers see pending requests on their dashboard after login—SMS is disabled until your team picks a provider.
             </p>
@@ -819,26 +881,6 @@ export default function VerifierPage() {
 
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-                    Security policy
-                  </div>
-                  <label className="mt-3 flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-800 bg-slate-950/30 px-4 py-3 text-sm font-semibold text-slate-200 hover:border-slate-700">
-                    <input
-                      type="checkbox"
-                      checked={requireCommitment}
-                      onChange={(e) => setRequireCommitment(e.target.checked)}
-                      className="mt-1 h-4 w-4 accent-sky-300"
-                    />
-                    <span className="leading-6">
-                      Require commitment-bound proof (liveness + face hash). If prover can’t produce it, backend verification will fail.
-                    </span>
-                  </label>
-                  <p className="mt-2 text-xs text-slate-400">
-                    This hardens against proof downgrades and binds identity attributes to the liveness session.
-                  </p>
-                </div>
-
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
                     Target mobile numbers
                   </div>
                   <textarea
@@ -893,7 +935,7 @@ export default function VerifierPage() {
               </div>
             </div>
 
-            <div className="mt-6 overflow-hidden rounded-2xl border border-slate-800">
+            <div className="mt-6 overflow-x-auto rounded-2xl border border-slate-800">
               <table className="w-full text-left text-sm">
                 <thead className="bg-slate-950/50 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
                   <tr>

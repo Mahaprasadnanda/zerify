@@ -34,7 +34,7 @@ export default function LoginPage() {
       <div className="pointer-events-none absolute -top-52 left-1/2 h-[520px] w-[980px] -translate-x-1/2 rounded-full glow-orb opacity-80" />
       <div className="pointer-events-none absolute inset-0 noise" />
 
-      <div className="relative mx-auto flex min-h-screen w-full max-w-xl flex-col justify-center px-6 py-16">
+      <div className="relative mx-auto flex min-h-screen w-full max-w-xl flex-col justify-center px-4 py-10 sm:px-6 sm:py-16">
         <OtpFlow
           title="Login as user"
           subtitle="Enter your registered mobile number. We’ll verify it with OTP."
@@ -45,10 +45,12 @@ export default function LoginPage() {
               setWarning("This number is not registered yet. Please register first.");
               return;
             }
-            localStorage.setItem(
+            sessionStorage.setItem(
               STORAGE_KEYS.userSession,
               JSON.stringify({ phone: phoneE164, verifiedAt: Date.now() }),
             );
+            // Clean legacy persistent session for stricter security.
+            localStorage.removeItem(STORAGE_KEYS.userSession);
             router.push("/prover");
           }}
         />

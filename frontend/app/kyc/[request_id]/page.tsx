@@ -314,9 +314,14 @@ export default function KycRequestPage({
         const padded = token.replace(/-/g, "+").replace(/_/g, "/");
         const normalized = padded + "=".repeat((4 - (padded.length % 4)) % 4);
         const decoded = decodeURIComponent(escape(atob(normalized)));
-        localStorage.setItem(STORAGE_KEYS.userSession, decoded);
+        sessionStorage.setItem(STORAGE_KEYS.userSession, decoded);
+        localStorage.removeItem(STORAGE_KEYS.userSession);
       }
-      const raw = localStorage.getItem(STORAGE_KEYS.userSession);
+      const raw = sessionStorage.getItem(STORAGE_KEYS.userSession) ?? localStorage.getItem(STORAGE_KEYS.userSession);
+      if (raw) {
+        sessionStorage.setItem(STORAGE_KEYS.userSession, raw);
+        localStorage.removeItem(STORAGE_KEYS.userSession);
+      }
       if (raw) {
         const parsed = JSON.parse(raw) as { phone: string };
         setSessionPhone(parsed.phone);
@@ -342,7 +347,7 @@ export default function KycRequestPage({
       setFaceVerificationPassed(passed);
       setRiskStatus(passed ? "verified" : "suspicious");
       try {
-        localStorage.setItem(key, passed ? "passed" : "failed");
+        sessionStorage.setItem(key, passed ? "passed" : "failed");
       } catch {}
       const cleaned = new URL(window.location.href);
       cleaned.searchParams.delete("face_match");
@@ -354,7 +359,11 @@ export default function KycRequestPage({
       return;
     }
     try {
-      const v = localStorage.getItem(key);
+      const v = sessionStorage.getItem(key) ?? localStorage.getItem(key);
+      if (v) {
+        sessionStorage.setItem(key, v);
+        localStorage.removeItem(key);
+      }
       const passed = v === "passed";
       setFaceVerificationPassed(passed);
       setRiskStatus(passed ? "verified" : "suspicious");
@@ -454,6 +463,7 @@ export default function KycRequestPage({
     setFaceVerificationPassed(false);
     setRiskStatus("suspicious");
     try {
+      sessionStorage.removeItem(`kyc_face_match_${requestId}`);
       localStorage.removeItem(`kyc_face_match_${requestId}`);
     } catch {}
   };
@@ -804,7 +814,7 @@ export default function KycRequestPage({
     u.searchParams.set("request_id", requestId);
     if (sessionPhone) u.searchParams.set("phone", sessionPhone);
     try {
-      const raw = localStorage.getItem(STORAGE_KEYS.userSession);
+      const raw = sessionStorage.getItem(STORAGE_KEYS.userSession) ?? localStorage.getItem(STORAGE_KEYS.userSession);
       if (raw) {
         const token = btoa(unescape(encodeURIComponent(raw)))
           .replace(/\+/g, "-")
@@ -825,7 +835,7 @@ export default function KycRequestPage({
       <div className="pointer-events-none absolute -top-52 left-1/2 h-[520px] w-[980px] -translate-x-1/2 rounded-full glow-orb opacity-80" />
       <div className="pointer-events-none absolute inset-0 noise" />
 
-      <div className="relative mx-auto w-full max-w-5xl px-6 py-14">
+      <div className="relative mx-auto w-full max-w-5xl px-4 py-10 sm:px-6 sm:py-14">
         <header className="mb-10 space-y-3">
           <div className="inline-flex w-fit items-center gap-2 rounded-full border border-slate-800 bg-slate-950/40 px-4 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-slate-200 shadow-soft">
             Zerify • User KYC
