@@ -18,6 +18,10 @@ class KycProofRequestContext(BaseModel):
         default_factory=dict,
         description="Verifier constraints: minAge, requiredGender, pincodes.",
     )
+    security: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Optional security policy (e.g. requireCommitment).",
+    )
 
 
 class VerifyProofRequest(BaseModel):
@@ -36,6 +40,10 @@ class VerifyProofRequest(BaseModel):
     nonce: str | None = Field(
         default=None,
         description="Optional; unused for Groth16 verify.",
+    )
+    scheme: str | None = Field(
+        default=None,
+        description="Optional proof scheme/version hint (e.g. groth16-flexible-kyc-commitment).",
     )
 
 

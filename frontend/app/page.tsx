@@ -21,8 +21,7 @@ export default function HomePage() {
             </h1>
 
             <p className="max-w-xl text-lg leading-8 text-slate-300">
-              Zerify lets verifiers confirm eligibility (age, gender, address) using zero-knowledge proofs.
-              Aadhaar QR processing stays in the browser. Only proof artifacts are shared.
+              Zerify now runs as two-site architecture: this frontend is for verifier and request launch, and the dedicated prover app (`face_matching`) handles Aadhaar upload, QR decode, liveness, face matching, and proof submission.
             </p>
 
             <div className="flex flex-col gap-3 sm:flex-row">
@@ -70,7 +69,7 @@ export default function HomePage() {
                   <span className="font-semibold text-slate-100">/verifier</span> — create KYC requests
                 </a>
                 <a className="rounded-2xl border border-slate-800 bg-slate-950/30 px-4 py-3 hover:border-slate-700" href="/prover">
-                  <span className="font-semibold text-slate-100">/prover</span> — pending requests (Firebase)
+                  <span className="font-semibold text-slate-100">/prover</span> — prover launcher (opens Face Matching App)
                 </a>
                 <a className="rounded-2xl border border-slate-800 bg-slate-950/30 px-4 py-3 hover:border-slate-700" href="/user/register">
                   <span className="font-semibold text-slate-100">/user/register</span> — register user (OTP)
@@ -78,13 +77,10 @@ export default function HomePage() {
                 <a className="rounded-2xl border border-slate-800 bg-slate-950/30 px-4 py-3 hover:border-slate-700" href="/user/login">
                   <span className="font-semibold text-slate-100">/user/login</span> — login user (OTP)
                 </a>
-                <div className="rounded-2xl border border-slate-800 bg-slate-950/30 px-4 py-3">
-                  <span className="font-semibold text-slate-100">/kyc/&lt;request_id&gt;</span> — QR + local checks (ZK later)
-                </div>
               </div>
 
               <p className="mt-6 text-xs leading-6 text-slate-400">
-                This is a research MVP UI. KYC request links are opened from the prover dashboard (SMS optional later); ZK circuits plug in when ready.
+                Verifier remains on this site. Prover flow is consolidated in the separate Face Matching app for unambiguous operation.
               </p>
             </div>
           </div>

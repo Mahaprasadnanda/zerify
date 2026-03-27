@@ -6,6 +6,10 @@ export type KycProofRequestContext = {
     requiredGender: string;
     pincodes: string[];
   };
+  security?: {
+    requireCommitment?: boolean;
+    nonce?: string | null;
+  };
 };
 
 export type VerifyProofPayload = {
@@ -13,6 +17,7 @@ export type VerifyProofPayload = {
   publicSignals: string[];
   requestContext: KycProofRequestContext;
   nonce?: string | null;
+  scheme?: string | null;
 };
 
 export type VerifyProofResponse = {

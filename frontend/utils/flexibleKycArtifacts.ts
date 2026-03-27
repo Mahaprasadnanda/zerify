@@ -3,16 +3,27 @@
  * Legacy `ageProof` paths are not used anywhere in the app.
  */
 
+import { safeLog } from "./safeLog";
+
 export const FLEXIBLE_KYC_ARTIFACT_BASE = "/zkp/flexibleKyc";
 export const FLEXIBLE_KYC_WASM_PATH = `${FLEXIBLE_KYC_ARTIFACT_BASE}/flexible_kyc.wasm`;
 export const FLEXIBLE_KYC_ZKEY_PATH = `${FLEXIBLE_KYC_ARTIFACT_BASE}/flexible_kyc_final.zkey`;
 export const FLEXIBLE_KYC_VKEY_PATH = `${FLEXIBLE_KYC_ARTIFACT_BASE}/flexible_kyc_verification_key.json`;
+
+export const FLEXIBLE_KYC_COMMITMENT_ARTIFACT_BASE = "/zkp/flexibleKycCommitment";
+export const FLEXIBLE_KYC_COMMITMENT_WASM_PATH = `${FLEXIBLE_KYC_COMMITMENT_ARTIFACT_BASE}/flexible_kyc_commitment.wasm`;
+export const FLEXIBLE_KYC_COMMITMENT_ZKEY_PATH = `${FLEXIBLE_KYC_COMMITMENT_ARTIFACT_BASE}/flexible_kyc_commitment_final.zkey`;
+export const FLEXIBLE_KYC_COMMITMENT_VKEY_PATH = `${FLEXIBLE_KYC_COMMITMENT_ARTIFACT_BASE}/flexible_kyc_commitment_verification_key.json`;
 
 const ARTIFACT_PATHS = [
   FLEXIBLE_KYC_ARTIFACT_BASE,
   FLEXIBLE_KYC_WASM_PATH,
   FLEXIBLE_KYC_ZKEY_PATH,
   FLEXIBLE_KYC_VKEY_PATH,
+  FLEXIBLE_KYC_COMMITMENT_ARTIFACT_BASE,
+  FLEXIBLE_KYC_COMMITMENT_WASM_PATH,
+  FLEXIBLE_KYC_COMMITMENT_ZKEY_PATH,
+  FLEXIBLE_KYC_COMMITMENT_VKEY_PATH,
 ] as const;
 
 function assertFlexibleKycOnly(): void {
@@ -28,5 +39,5 @@ function assertFlexibleKycOnly(): void {
 assertFlexibleKycOnly();
 
 if (typeof window !== "undefined") {
-  console.info("[Zerify ZKP] Using flexibleKyc ZKP artifacts");
+  safeLog("ZKP artifacts loaded");
 }

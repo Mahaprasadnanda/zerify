@@ -20,15 +20,33 @@ type KycConstraints = {
 };
 
 type ZkStoredProof = {
-  version: 1;
-  scheme: "groth16-flexible-kyc";
+  version: 1 | 2;
+  scheme: "groth16-flexible-kyc" | "groth16-flexible-kyc-commitment";
   createdAt: number;
+  nonce?: string;
   proof: Record<string, unknown>;
   publicSignals: string[];
 };
 
 type KycUserState = {
   proof: null | ZkStoredProof;
+  risk?: {
+    status?: "verified" | "suspicious" | "matched" | "mismatch";
+    faceMatchStatus?: "matched" | "suspicious" | "mismatch";
+    /** L2 distance vs Aadhaar portrait (primary when present). */
+    aadhaarFaceDistance?: number | null;
+    cosineSimilarity?: number | null;
+    /** Max allowed distance for “same person” (lower is stricter). */
+    threshold?: number;
+    infraUnavailable?: boolean | null;
+    liveness?: {
+      status?: "pass" | "fail";
+      blink?: boolean;
+      headLeft?: boolean;
+      headRight?: boolean;
+    };
+    updatedAt?: number;
+  };
   verification: {
     ageVerified: boolean | null;
     genderVerified: boolean | null;
@@ -47,13 +65,33 @@ type KycRequest = {
   checks: VerificationType[];
   constraints: KycConstraints;
   purpose?: string;
+  nonce?: string;
+  security?: { requireCommitment?: boolean; nonce?: string };
   createdAt: number;
   users: Record<string, KycUserState>;
 };
 
+function generateNonceBase64Url(bytes = 16): string {
+  const buf = new Uint8Array(bytes);
+  crypto.getRandomValues(buf);
+  let bin = "";
+  for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]!);
+  const b64 = btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  return b64;
+}
+
 function defaultEmptyUserState(): KycUserState {
   return {
     proof: null,
+    risk: {
+      status: undefined,
+      aadhaarFaceDistance: null,
+      cosineSimilarity: null,
+      threshold: 0.65,
+      infraUnavailable: null,
+      liveness: {},
+      updatedAt: undefined,
+    },
     verification: {
       ageVerified: null,
       genderVerified: null,
@@ -68,8 +106,24 @@ function normalizeUserState(raw: Partial<KycUserState> | null | undefined): KycU
   const base = defaultEmptyUserState();
   if (!raw) return base;
   const v = raw.verification;
+  const r = raw.risk;
   return {
     proof: raw.proof ?? null,
+    risk: {
+      status: r?.status,
+      faceMatchStatus: r?.faceMatchStatus,
+      aadhaarFaceDistance: typeof r?.aadhaarFaceDistance === "number" ? r?.aadhaarFaceDistance : null,
+      cosineSimilarity: typeof r?.cosineSimilarity === "number" ? r?.cosineSimilarity : null,
+      threshold: typeof r?.threshold === "number" ? r?.threshold : 0.65,
+      infraUnavailable: r?.infraUnavailable ?? null,
+      liveness: {
+        status: r?.liveness?.status,
+        blink: r?.liveness?.blink,
+        headLeft: r?.liveness?.headLeft,
+        headRight: r?.liveness?.headRight,
+      },
+      updatedAt: r?.updatedAt,
+    },
     verification: {
       ageVerified: v?.ageVerified ?? null,
       genderVerified: v?.genderVerified ?? null,
@@ -135,6 +189,24 @@ function AttrBadge({ status }: { status: "verified" | "not-verified" | "pending"
   return <span className={`inline-flex rounded-2xl border px-3 py-1 text-xs font-semibold ${cls}`}>{status}</span>;
 }
 
+function isGroth16FlexibleKycScheme(
+  scheme: string | undefined,
+): scheme is ZkStoredProof["scheme"] {
+  return scheme === "groth16-flexible-kyc" || scheme === "groth16-flexible-kyc-commitment";
+}
+
+function RiskBadge({ status }: { status: "verified" | "suspicious" | "matched" | "mismatch" | "unknown" }) {
+  const cls =
+    status === "verified" || status === "matched"
+      ? "border-emerald-400/35 bg-emerald-500/10 text-emerald-100"
+      : status === "suspicious"
+        ? "border-amber-400/35 bg-amber-500/10 text-amber-100"
+        : status === "mismatch"
+          ? "border-rose-400/35 bg-rose-500/10 text-rose-100"
+        : "border-slate-800 bg-slate-950/40 text-slate-300";
+  return <span className={`inline-flex rounded-2xl border px-3 py-1 text-xs font-semibold ${cls}`}>{status}</span>;
+}
+
 function safeNameFromEmail(email: string) {
   const part = email.split("@")[0] || "Verifier";
   return part.slice(0, 30);
@@ -173,6 +245,7 @@ export default function VerifierPage() {
   const [minAge, setMinAge] = useState(18);
   const [requiredGender, setRequiredGender] = useState<KycConstraints["requiredGender"]>("");
   const [purpose, setPurpose] = useState("");
+  const [requireCommitment, setRequireCommitment] = useState(false);
   const [pincodeInput, setPincodeInput] = useState("");
   const [pincodes, setPincodes] = useState<string[]>([]);
   const [mobilesInput, setMobilesInput] = useState("");
@@ -292,8 +365,10 @@ export default function VerifierPage() {
       }
       const requestId = createRequestId();
       const verifierEmail = authUser.email ?? email.trim();
+      const nonce = generateNonceBase64Url(16);
       const payload: KycRequest = {
         requestId,
+        nonce,
         verifier: {
           uid: authUser.uid,
           email: verifierEmail,
@@ -306,6 +381,7 @@ export default function VerifierPage() {
           pincodes,
         },
         purpose: purpose.trim(),
+        security: { requireCommitment, nonce },
         createdAt: Date.now(),
         users: Object.fromEntries(
           phoneNumbers.map((p) => [
@@ -343,6 +419,8 @@ export default function VerifierPage() {
             checks: payload.checks,
             constraints: payload.constraints,
             purpose: payload.purpose,
+            security: payload.security,
+            nonce: payload.nonce,
           }),
         ),
         ),
@@ -381,6 +459,7 @@ export default function VerifierPage() {
       setPincodes([]);
       setPincodeInput("");
       setPurpose("");
+      setRequireCommitment(false);
       setSendSuccess(
         `Request ${requestId} saved. Recipients can open it from their prover dashboard after logging in with the same number (no SMS for now).`,
       );
@@ -403,7 +482,7 @@ export default function VerifierPage() {
     const userState = normalizeUserState(request.users?.[phone]);
     const zk = userState.proof;
     setVerifyError(null);
-    if (!zk || zk.scheme !== "groth16-flexible-kyc") {
+    if (!zk || (zk.scheme !== "groth16-flexible-kyc" && zk.scheme !== "groth16-flexible-kyc-commitment")) {
       setVerifyError("No Groth16 proof on file for this recipient.");
       return;
     }
@@ -416,6 +495,8 @@ export default function VerifierPage() {
       const res = await verifyProof({
         proof: zk.proof,
         publicSignals: zk.publicSignals,
+        scheme: zk.scheme,
+        nonce: zk.nonce ?? request.nonce ?? request.security?.nonce ?? null,
         requestContext: {
           createdAt: request.createdAt,
           checks: request.checks,
@@ -423,6 +504,10 @@ export default function VerifierPage() {
             minAge: request.constraints.minAge,
             requiredGender: request.constraints.requiredGender,
             pincodes: request.constraints.pincodes,
+          },
+          security: {
+            requireCommitment: Boolean(request.security?.requireCommitment),
+            nonce: request.nonce ?? request.security?.nonce ?? null,
           },
         },
       });
@@ -734,6 +819,26 @@ export default function VerifierPage() {
 
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                    Security policy
+                  </div>
+                  <label className="mt-3 flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-800 bg-slate-950/30 px-4 py-3 text-sm font-semibold text-slate-200 hover:border-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={requireCommitment}
+                      onChange={(e) => setRequireCommitment(e.target.checked)}
+                      className="mt-1 h-4 w-4 accent-sky-300"
+                    />
+                    <span className="leading-6">
+                      Require commitment-bound proof (liveness + face hash). If prover can’t produce it, backend verification will fail.
+                    </span>
+                  </label>
+                  <p className="mt-2 text-xs text-slate-400">
+                    This hardens against proof downgrades and binds identity attributes to the liveness session.
+                  </p>
+                </div>
+
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
                     Target mobile numbers
                   </div>
                   <textarea
@@ -933,7 +1038,7 @@ export default function VerifierPage() {
                           </div>
                         </div>
 
-                        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                        <div className="mt-4 grid gap-3 sm:grid-cols-4">
                           <div className="space-y-2">
                             <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Age</div>
                             <AttrBadge status={ageStatus} />
@@ -946,13 +1051,40 @@ export default function VerifierPage() {
                             <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Address</div>
                             <AttrBadge status={addressStatus} />
                           </div>
+                          <div className="space-y-2">
+                            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Risk</div>
+                            <RiskBadge
+                              status={
+                                userState.risk?.faceMatchStatus ??
+                                (userState.risk?.status === "verified" ? "matched" : userState.risk?.status ?? "unknown")
+                              }
+                            />
+                          </div>
                         </div>
+
+                        {userState.risk?.aadhaarFaceDistance !== null &&
+                        typeof userState.risk?.aadhaarFaceDistance === "number" ? (
+                          <div className="mt-3 text-xs text-slate-400">
+                            Face vs Aadhaar photo: distance {userState.risk.aadhaarFaceDistance.toFixed(3)} (same person
+                            if ≤ {userState.risk.threshold ?? 0.65})
+                          </div>
+                        ) : userState.risk?.cosineSimilarity !== null &&
+                          typeof userState.risk?.cosineSimilarity === "number" ? (
+                          <div className="mt-3 text-xs text-slate-400">
+                            Cosine (legacy): {userState.risk.cosineSimilarity.toFixed(3)} (older runs used cosine; lower
+                            distance above is authoritative when present)
+                          </div>
+                        ) : userState.risk?.infraUnavailable ? (
+                          <div className="mt-3 text-xs text-slate-400">
+                            Similarity unavailable on prover device (models/camera).
+                          </div>
+                        ) : null}
 
                         <button
                           type="button"
                           disabled={
                             !proof ||
-                            proof.scheme !== "groth16-flexible-kyc" ||
+                            !isGroth16FlexibleKycScheme(proof.scheme) ||
                             verifyBusyPhone === phone
                           }
                           className="btn-primary shimmer mt-4 w-full rounded-2xl px-4 py-3 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
@@ -961,9 +1093,9 @@ export default function VerifierPage() {
                           {verifyBusyPhone === phone ? "Verifying…" : "Verify ZK proof (backend)"}
                         </button>
 
-                        {proof && proof.scheme === "groth16-flexible-kyc" ? (
+                        {proof && isGroth16FlexibleKycScheme(proof.scheme) ? (
                           <div className="mt-3 text-xs text-slate-300">
-                            Groth16 proof on file • {proof.publicSignals.length} public signals • saved{" "}
+                            Groth16 proof on file ({proof.scheme}) • {proof.publicSignals.length} public signals • saved{" "}
                             {new Date(proof.createdAt).toLocaleString()}
                           </div>
                         ) : null}

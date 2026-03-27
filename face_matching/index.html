@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KYC Verification</title>
+  <link rel="stylesheet" href="/src/styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>KYC Verification</h1>
+      <p class="subtitle">Privacy-Preserving &middot; Browser-Only &middot; No Data Leaves Your Device</p>
+      <p id="handoff-context" class="subtitle"></p>
+      <div id="model-badge" class="badge hidden"></div>
+      <button id="btn-logout" class="logout-btn" type="button" aria-label="Logout">
+        Logout
+      </button>
+    </header>
+
+    <section id="request-context" class="panel" style="margin-bottom:1rem;">
+      <h2>KYC Request Context</h2>
+      <div id="request-meta" class="upload-hint">Loading request constraints…</div>
+      <div id="constraint-pills" class="upload-hint" style="margin-top:8px;"></div>
+      <div id="purpose-line" class="upload-hint" style="margin-top:8px;"></div>
+      <div id="qr-gate-note" class="upload-hint" style="margin-top:8px;">
+        Upload Aadhaar image to run QR decode + UIDAI signature + constraints checks.
+      </div>
+    </section>
+
+    <div id="status-bar">
+      <div class="status-row">
+        <div id="status-text">Initializing...</div>
+        <div class="status-actions">
+          <label class="select-label">
+            <span>Strictness</span>
+            <select id="strictness">
+              <option value="balanced" selected>Balanced</option>
+            </select>
+          </label>
+          <button id="btn-retry-camera" class="secondary hidden" type="button">Retry camera</button>
+        </div>
+      </div>
+      <div id="progress-bar"><div id="progress-fill"></div></div>
+    </div>
+
+    <main>
+      <div class="panels">
+        <section class="panel" id="capture-panel">
+          <h2>Live Capture</h2>
+          <div class="video-container">
+            <video id="camera-feed" autoplay playsinline muted></video>
+            <div id="camera-overlay" class="camera-overlay hidden">
+              <span>Camera paused</span>
+            </div>
+          </div>
+          <div class="controls">
+            <button id="btn-liveness" class="secondary" type="button">Run Liveness Check</button>
+            <button id="btn-retake" class="secondary hidden">Retake</button>
+            <button id="btn-confirm" class="success hidden">Confirm</button>
+          </div>
+          <div id="liveness-note" class="upload-hint" style="margin-top:8px;">Complete liveness check before capture.</div>
+          <div id="frames-preview" class="frames hidden">
+            <h3>Captured Frames</h3>
+            <div class="frames-grid">
+              <div class="frame" id="frame-0"><span class="frame-label">1</span></div>
+              <div class="frame" id="frame-1"><span class="frame-label">2</span></div>
+              <div class="frame" id="frame-2"><span class="frame-label">3</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" id="aadhaar-panel">
+          <h2>Aadhaar / ID Image</h2>
+          <div class="upload-area" id="upload-area">
+            <input type="file" id="aadhaar-input" accept="image/*">
+            <label for="aadhaar-input">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>
+              </svg>
+              <span>Click or drag to upload ID image</span>
+              <span class="upload-hint">Supports JPG, PNG, WebP</span>
+            </label>
+          </div>
+          <div id="aadhaar-preview" class="hidden">
+            <img id="aadhaar-img" alt="Uploaded ID">
+            <button id="btn-remove-aadhaar" class="icon-btn" title="Remove image">&times;</button>
+            <button id="btn-reprocess-aadhaar" class="secondary reprocess-btn" type="button">Reprocess ID</button>
+          </div>
+          <div id="aadhaar-face-preview" class="face-preview hidden">
+            <h3>Extracted Face</h3>
+            <canvas id="aadhaar-face-canvas" width="112" height="112"></canvas>
+          </div>
+          <div id="qr-checks" class="hidden" style="margin-top:10px;">
+            <h3>QR + Constraint Checks</h3>
+            <div id="qr-checks-card" class="qr-checks-card">
+              <div class="qr-check-row">
+                <span class="qr-check-label">UIDAI signature</span>
+                <span id="qr-uidai-status" class="qr-check-value">—</span>
+              </div>
+              <div class="qr-check-row">
+                <span class="qr-check-label">Age</span>
+                <span id="qr-age-status" class="qr-check-value">—</span>
+              </div>
+              <div class="qr-check-row">
+                <span class="qr-check-label">Gender</span>
+                <span id="qr-gender-status" class="qr-check-value">—</span>
+              </div>
+              <div class="qr-check-row">
+                <span class="qr-check-label">Address / Pincode</span>
+                <span id="qr-address-status" class="qr-check-value">—</span>
+              </div>
+              <div id="qr-extracted-line" class="qr-extracted-line"></div>
+              <div id="qr-checks-status-note" class="qr-checks-status-note">Upload Aadhaar image to start.</div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section id="comparison" class="hidden">
+        <h2>Face Comparison</h2>
+        <div class="comparison-view">
+          <div class="comparison-face">
+            <span class="comparison-label">Live Capture</span>
+            <canvas id="compare-live" width="112" height="112"></canvas>
+          </div>
+          <div class="comparison-vs">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 8l4 4-4 4M6 16l-4-4 4-4M2 12h20"/>
+            </svg>
+          </div>
+          <div class="comparison-face">
+            <span class="comparison-label">Aadhaar Face</span>
+            <canvas id="compare-aadhaar" width="112" height="112"></canvas>
+          </div>
+        </div>
+        <button id="btn-compare" class="primary-lg" disabled>Compare Faces</button>
+      </section>
+
+      <section id="result" class="hidden">
+        <div id="result-card">
+          <div id="result-icon"></div>
+          <div id="result-status"></div>
+          <div id="result-explanation"></div>
+          <div class="result-metrics">
+            <div class="metric">
+              <span class="metric-label">Cosine Similarity</span>
+              <span class="metric-value" id="metric-similarity">&mdash;</span>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Euclidean Distance</span>
+              <span class="metric-value" id="metric-distance">&mdash;</span>
+            </div>
+          </div>
+          <div class="guidance">
+            Ensure good lighting, face centered, and minimal blur. For old/low-quality ID photos, moderate similarity may require a secondary check.
+          </div>
+        </div>
+        <button id="btn-proof" class="primary-lg" disabled>Generate proof &amp; send to verifier</button>
+        <div id="proof-note" class="upload-hint" style="margin-top:8px;"></div>
+        <button id="btn-reset" class="secondary">Reset &amp; Start Over</button>
+      </section>
+    </main>
+
+    <footer>
+      <p>All processing runs locally in your browser. No images or biometric data are transmitted.</p>
+    </footer>
+  </div>
+
+  <script type="module" src="/src/main2.js"></script>
+</body>
+</html>

@@ -18,7 +18,18 @@ If you see **"Saving request timed out"**, the Realtime Database is likely rejec
         "users": {
           "$phone": {
             ".read": true,
-            ".write": true
+            ".write": false,
+            "proof": {
+              ".write": "!data.exists()",
+              ".validate": "newData.hasChildren(['version','scheme','createdAt','proof','publicSignals']) && newData.child('scheme').isString() && newData.child('publicSignals').isList() && (!root.child('kycRequests/' + $requestId + '/nonce').exists() || newData.child('nonce').val() == root.child('kycRequests/' + $requestId + '/nonce').val())"
+            },
+            "risk": {
+              ".write": true,
+              ".validate": "newData.child('status').val() in ['verified','suspicious']"
+            },
+            "verification": {
+              ".write": "auth != null && root.child('kycRequests/' + $requestId + '/verifier/uid').val() == auth.uid"
+            }
           }
         }
       }
@@ -52,7 +63,10 @@ If you see **"Saving request timed out"**, the Realtime Database is likely rejec
 ## What this allows
 
 - **Verifiers** (signed in with email/password): create/update/delete only their own requests (`kycRequests/{requestId}.verifier.uid` must match `auth.uid`).
-- **Provers** (no Firebase auth): **read** any `kycRequests/{requestId}` (MVP — request IDs are unguessable; tighten for production), and **read/write** their own `users/{phone}` subtree so demo/ZK proofs can be stored later.
+- **Provers** (no Firebase auth): **read** any `kycRequests/{requestId}` (MVP — request IDs are unguessable; tighten for production), and can only write:
+  - `kycRequests/{requestId}/users/{phone}/proof`
+  - `kycRequests/{requestId}/users/{phone}/risk`
+  Provers cannot overwrite the entire user node or write `verification`.
 - **User indices**: verifier can write/delete `indices/userRequests/{phone}/{requestId}` only if they own that request.
 - **indices / recipientProfiles**: otherwise unchanged from above.
 

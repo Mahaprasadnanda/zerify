@@ -4,10 +4,15 @@ import {
   FLEXIBLE_KYC_VKEY_PATH,
   FLEXIBLE_KYC_WASM_PATH,
   FLEXIBLE_KYC_ZKEY_PATH,
+  FLEXIBLE_KYC_COMMITMENT_VKEY_PATH,
+  FLEXIBLE_KYC_COMMITMENT_WASM_PATH,
+  FLEXIBLE_KYC_COMMITMENT_ZKEY_PATH,
 } from "@/utils/flexibleKycArtifacts";
 import {
   buildFlexibleKycInput,
   type FlexibleKycFullInput,
+  buildFlexibleKycCommitmentInput,
+  type FlexibleKycCommitmentFullInput,
   type KycConstraints,
   type VerificationType,
 } from "@/utils/flexibleKycWitness";
@@ -16,6 +21,13 @@ export type FlexibleKycProofResult = {
   proof: Record<string, unknown>;
   publicSignals: string[];
   input: FlexibleKycFullInput;
+  localVerificationPassed: boolean;
+};
+
+export type FlexibleKycCommitmentProofResult = {
+  proof: Record<string, unknown>;
+  publicSignals: string[];
+  input: FlexibleKycCommitmentFullInput;
   localVerificationPassed: boolean;
 };
 
@@ -41,10 +53,12 @@ export async function generateFlexibleKycProof(params: {
   checks: VerificationType[];
   constraints: KycConstraints;
   anchorYear: number;
+  nonce?: string | null;
 }): Promise<FlexibleKycProofResult> {
   const input = buildFlexibleKycInput({
     ...params,
     currentYear: params.anchorYear,
+    nonce: params.nonce ?? null,
   });
 
   const { proof, publicSignals } = await groth16.fullProve(
@@ -57,6 +71,43 @@ export async function generateFlexibleKycProof(params: {
   const localVerificationPassed = await groth16.verify(verificationKey, publicSignals, proof);
   if (!localVerificationPassed) {
     throw new Error("Local Groth16 verification failed.");
+  }
+
+  return {
+    proof: proof as Record<string, unknown>,
+    publicSignals,
+    input,
+    localVerificationPassed,
+  };
+}
+
+export async function generateFlexibleKycCommitmentProof(params: {
+  dob: string;
+  genderRaw: string;
+  address: string;
+  checks: VerificationType[];
+  constraints: KycConstraints;
+  anchorYear: number;
+  faceHash: string;
+  commitment: string;
+  nonce?: string | null;
+}): Promise<FlexibleKycCommitmentProofResult> {
+  const input = buildFlexibleKycCommitmentInput({
+    ...params,
+    currentYear: params.anchorYear,
+    nonce: params.nonce ?? null,
+  });
+
+  const { proof, publicSignals } = await groth16.fullProve(
+    input,
+    FLEXIBLE_KYC_COMMITMENT_WASM_PATH,
+    FLEXIBLE_KYC_COMMITMENT_ZKEY_PATH,
+  );
+
+  const verificationKey = await fetchJson<Record<string, unknown>>(FLEXIBLE_KYC_COMMITMENT_VKEY_PATH);
+  const localVerificationPassed = await groth16.verify(verificationKey, publicSignals, proof);
+  if (!localVerificationPassed) {
+    throw new Error("Local Groth16 verification failed (commitment circuit).");
   }
 
   return {

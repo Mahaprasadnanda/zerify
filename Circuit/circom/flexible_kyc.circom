@@ -37,6 +37,8 @@ template FlexibleKyc() {
     signal input check_age;
     signal input check_gender;
     signal input check_address;
+    // ---- Replay protection binding: unique request nonce (public) ----
+    signal input nonce;
 
     // --- Age: when check_age = 1, require current_year >= dob_year + min_age ---
     component cmpAge = LessThan(16);
@@ -80,6 +82,10 @@ template FlexibleKyc() {
     component pinZero = IsZero();
     pinZero.in <== sumMatches;
     check_address * pinZero.out === 0;
+
+    // Bind the public nonce into the circuit constraints (so proofs cannot be reused with a different nonce).
+    // Tautological but ensures `nonce` participates in R1CS evaluations.
+    nonce * 1 === nonce;
 }
 
 component main {public [
@@ -98,5 +104,6 @@ component main {public [
     use_pincode5,
     check_age,
     check_gender,
-    check_address
+    check_address,
+    nonce
 ]} = FlexibleKyc();

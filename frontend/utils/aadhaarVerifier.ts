@@ -1,5 +1,6 @@
-﻿import { inflate } from "pako";
+import { inflate } from "pako";
 import { UIDAI_CERT } from "./uidaiCert";
+import { safeError, safeLog } from "./safeLog";
 
 const DELIMITER = 0xff;
 const SIGNATURE_LENGTH = 256;
@@ -104,11 +105,27 @@ type ImportedPublicKey = {
 
 let publicKeyPromise: Promise<ImportedPublicKey> | null = null;
 
+/**
+ * Raw QR text may include whitespace, BOM, or a short non-secure QR decoded first.
+ * UIDAI secure payload is a long decimal string; we normalize before parse/verify.
+ */
+export function normalizeSecureQrPayload(raw: string): string {
+  const compact = raw.trim().replace(/^\uFEFF/, "").replace(/\s+/g, "");
+  if (/^\d+$/.test(compact)) return compact;
+  const digitsOnly = compact.replace(/\D/g, "");
+  if (digitsOnly.length >= 200) return digitsOnly;
+  const longRuns = compact.match(/\d{200,}/g);
+  if (longRuns?.length) {
+    return longRuns.reduce((a, b) => (a.length >= b.length ? a : b));
+  }
+  return digitsOnly.length >= 12 ? digitsOnly : compact;
+}
+
 export async function verifyAadhaarSecureQr(
   decodedPayload: string,
 ): Promise<AadhaarVerificationResult> {
   try {
-    const parsed = parseSecureQrPayload(decodedPayload);
+    const parsed = parseSecureQrPayload(normalizeSecureQrPayload(decodedPayload));
     const importedKey = await getUidaiPublicKey();
     const referenceTime = parsed.debug.referenceTimestamp
       ? new Date(parsed.debug.referenceTimestamp)
@@ -117,35 +134,6 @@ export async function verifyAadhaarSecureQr(
     const certificateExpiredForReferenceId = referenceTime
       ? certValidTo < referenceTime
       : undefined;
-
-    console.groupCollapsed("[AadhaarVerifier] Secure QR debug");
-    console.info("decompressedBytes.length", parsed.debug.decompressedBytesLength);
-    console.info("signature.length", parsed.debug.signatureLength);
-    console.info("signedData.length", parsed.debug.signedDataLength);
-    console.info("payloadOnlySignedData.length", parsed.debug.payloadOnlyLength);
-    console.info(
-      "signature.length === 256",
-      parsed.debug.signatureLength === SIGNATURE_LENGTH,
-    );
-    console.info("signedData first 64 bytes", parsed.debug.first64SignedDataHex);
-    console.info("certificate DER length", importedKey.certificateDerLength);
-    console.info("SPKI length", importedKey.spkiLength);
-    console.info("public key type", importedKey.key.type);
-    console.info("public key algorithm", importedKey.key.algorithm);
-    console.info("certificate subject", importedKey.subject);
-    console.info("certificate issuer", importedKey.issuer);
-    console.info("certificate valid from", importedKey.validFrom);
-    console.info("certificate valid to", importedKey.validTo);
-    console.info("reference timestamp", parsed.debug.referenceTimestamp);
-    console.info(
-      "certificate expired for reference timestamp",
-      certificateExpiredForReferenceId,
-    );
-    console.info(
-      "WebCrypto pre-hash required",
-      false,
-      "RSASSA-PKCS1-v1_5 with hash=SHA-256 hashes internally during verify().",
-    );
 
     const verifyDirect = await crypto.subtle.verify(
       { name: "RSASSA-PKCS1-v1_5" },
@@ -176,14 +164,6 @@ export async function verifyAadhaarSecureQr(
       parsed.payloadOnlySignedData,
     );
 
-    console.info("verifyDirect", verifyDirect);
-    console.info("verifyReversedSignature", verifyReversedSignature);
-    console.info("verifyDirectPayloadOnly", verifyDirectPayloadOnly);
-    console.info(
-      "verifyReversedSignaturePayloadOnly",
-      verifyReversedSignaturePayloadOnly,
-    );
-
     let isValid = false;
     let selectedStrategy = "none";
 
@@ -201,8 +181,9 @@ export async function verifyAadhaarSecureQr(
       selectedStrategy = "direct/payload-only";
     }
 
-    console.info("selectedStrategy", selectedStrategy);
-    console.groupEnd();
+    if (isValid) {
+      safeLog("QR verification completed");
+    }
 
     return {
       isValid,
@@ -226,8 +207,8 @@ export async function verifyAadhaarSecureQr(
         selectedStrategy,
       },
     };
-  } catch (error) {
-    console.error("[AadhaarVerifier] verification failed", error);
+  } catch {
+    safeError("Aadhaar QR verification failed");
 
     return {
       isValid: false,

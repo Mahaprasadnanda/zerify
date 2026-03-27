@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import { onValue, ref } from "firebase/database";
 import { firebaseDb } from "@/lib/firebaseClient";
 
@@ -12,10 +11,17 @@ const STORAGE_KEYS = {
 type UserSession = { phone: string; verifiedAt: number };
 
 export default function ProverPage() {
-  const router = useRouter();
+  const faceMatchingBaseUrl =
+    process.env.NEXT_PUBLIC_FACE_MATCHING_URL ?? "http://localhost:3010";
   const [session, setSession] = useState<UserSession | null>(null);
   const [requestSummaries, setRequestSummaries] = useState<
-    Array<{ requestId: string; verifierName?: string; createdAt?: number }>
+    Array<{
+      requestId: string;
+      verifierName?: string;
+      createdAt?: number;
+      riskStatus?: "verified" | "suspicious" | "matched" | "mismatch" | "unknown";
+      proofScheme?: string | null;
+    }>
   >([]);
 
   useEffect(() => {
@@ -49,7 +55,74 @@ export default function ProverPage() {
     });
   }, [session?.phone]);
 
+  const topRequestIdsKey = useMemo(
+    () => requestSummaries.slice(0, 12).map((r) => r.requestId).join("|"),
+    [requestSummaries],
+  );
+
+  useEffect(() => {
+    if (!session?.phone) return;
+    if (requestSummaries.length === 0) return;
+    const unsubs: Array<() => void> = [];
+    for (const r of requestSummaries.slice(0, 12)) {
+      const base = `kycRequests/${r.requestId}/users/${session.phone}`;
+      const riskRef = ref(firebaseDb, `${base}/risk/status`);
+      const schemeRef = ref(firebaseDb, `${base}/proof/scheme`);
+      unsubs.push(
+        onValue(riskRef, (snap) => {
+          const v = snap.val() as "verified" | "suspicious" | "matched" | "mismatch" | null;
+          setRequestSummaries((prev) =>
+            prev.map((x) => (x.requestId === r.requestId ? { ...x, riskStatus: v ?? "unknown" } : x)),
+          );
+        }),
+      );
+      unsubs.push(
+        onValue(schemeRef, (snap) => {
+          const v = snap.val() as string | null;
+          setRequestSummaries((prev) =>
+            prev.map((x) => (x.requestId === r.requestId ? { ...x, proofScheme: v ?? null } : x)),
+          );
+        }),
+      );
+    }
+    return () => unsubs.forEach((u) => u());
+  }, [topRequestIdsKey, session?.phone, requestSummaries.length, requestSummaries]);
+
   const hasSession = Boolean(session?.phone);
+
+  const openFaceMatching = (reqId: string) => {
+    if (!session?.phone) return;
+    let resolvedBase = faceMatchingBaseUrl;
+    try {
+      const candidate = new URL(faceMatchingBaseUrl);
+      if (
+        typeof window !== "undefined" &&
+        candidate.origin === window.location.origin &&
+        (candidate.pathname === "/" || candidate.pathname === "")
+      ) {
+        resolvedBase = "http://localhost:3010";
+      }
+    } catch {
+      resolvedBase = "http://localhost:3010";
+    }
+    const u = new URL(resolvedBase);
+    u.searchParams.set("request_id", reqId);
+    u.searchParams.set("phone", session.phone);
+    u.searchParams.set("return_url", window.location.href);
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.userSession);
+      if (raw) {
+        const token = btoa(unescape(encodeURIComponent(raw)))
+          .replace(/\+/g, "-")
+          .replace(/\//g, "_")
+          .replace(/=+$/, "");
+        u.searchParams.set("session_token", token);
+      }
+    } catch {
+      // ignore token encoding failures
+    }
+    window.location.href = u.toString();
+  };
 
   return (
     <main className="min-h-screen surface">
@@ -59,13 +132,13 @@ export default function ProverPage() {
       <div className="relative mx-auto w-full max-w-6xl px-6 py-14">
         <header className="mb-10">
           <div className="inline-flex w-fit items-center gap-2 rounded-full border border-slate-800 bg-slate-950/40 px-4 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-slate-200 shadow-soft">
-            Zerify • Prover
+            Zerify • Prover Launcher
           </div>
           <h1 className="mt-4 text-4xl font-semibold tracking-tight text-slate-50">
             Your KYC requests
           </h1>
           <p className="mt-2 text-base text-slate-300">
-            Pending requests come from Firebase (matched to your logged-in phone). Open one to upload Aadhaar QR and run local checks—ZK proofs come later.
+            This page only launches the dedicated prover site. All prover operations now run in Face Matching App: Aadhaar upload, QR decode, liveness, face match, and proof submission.
           </p>
         </header>
 
@@ -108,6 +181,7 @@ export default function ProverPage() {
                   <tr>
                     <th className="px-4 py-3">Request</th>
                     <th className="px-4 py-3">Verifier</th>
+                    <th className="px-4 py-3">Risk</th>
                     <th className="px-4 py-3">Sent</th>
                     <th className="px-4 py-3">Open</th>
                   </tr>
@@ -115,7 +189,7 @@ export default function ProverPage() {
                 <tbody className="divide-y divide-slate-800 bg-slate-950/20">
                   {requestSummaries.length === 0 ? (
                     <tr>
-                      <td className="px-4 py-6 text-slate-400" colSpan={4}>
+                      <td className="px-4 py-6 text-slate-400" colSpan={5}>
                         No requests yet. When a verifier adds your number to a KYC request, it will appear here.
                       </td>
                     </tr>
@@ -126,9 +200,29 @@ export default function ProverPage() {
                           <div className="font-semibold text-slate-100">
                             {r.requestId}
                           </div>
+                          {r.proofScheme ? (
+                            <div className="mt-1 text-[11px] text-slate-400">
+                              Proof: {r.proofScheme === "groth16-flexible-kyc-commitment" ? "commitment" : "standard"}
+                            </div>
+                          ) : null}
                         </td>
                         <td className="px-4 py-4 text-slate-300">
                           {r.verifierName ?? "—"}
+                        </td>
+                        <td className="px-4 py-4">
+                          <span
+                            className={`inline-flex rounded-2xl border px-3 py-1 text-xs font-semibold ${
+                              r.riskStatus === "verified" || r.riskStatus === "matched"
+                                ? "border-emerald-400/35 bg-emerald-500/10 text-emerald-100"
+                                : r.riskStatus === "suspicious"
+                                  ? "border-amber-400/35 bg-amber-500/10 text-amber-100"
+                                  : r.riskStatus === "mismatch"
+                                    ? "border-rose-400/35 bg-rose-500/10 text-rose-100"
+                                  : "border-slate-800 bg-slate-950/40 text-slate-300"
+                            }`}
+                          >
+                            {r.riskStatus ?? "unknown"}
+                          </span>
                         </td>
                         <td className="px-4 py-4 text-slate-400">
                           {r.createdAt
@@ -139,9 +233,9 @@ export default function ProverPage() {
                           <button
                             type="button"
                             className="btn-primary shimmer inline-flex rounded-2xl px-4 py-2 text-sm font-semibold text-slate-950"
-                            onClick={() => router.push(`/kyc/${encodeURIComponent(r.requestId)}`)}
+                            onClick={() => openFaceMatching(r.requestId)}
                           >
-                            Open
+                            Open Prover App
                           </button>
                         </td>
                       </tr>

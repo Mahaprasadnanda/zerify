@@ -22,7 +22,7 @@ export async function verifyOtp(
   });
   const data = (await res.json()) as { ok?: boolean; message?: string; status?: string };
   if (!res.ok) return { ok: false, message: data.message ?? "Failed to verify OTP" };
-  if (!data.ok) return { ok: false, message: data.message ?? `OTP not approved (${data.status ?? "unknown"})` };
+  if (!data.ok) return { ok: false, message: data.message ?? "Incorrect OTP" };
   return { ok: true };
 }
 

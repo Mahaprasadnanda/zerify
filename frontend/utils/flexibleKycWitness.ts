@@ -1,7 +1,28 @@
 import { canonicalGender as canonicalGenderFn } from "@/lib/genderNormalize";
 
 /** Must match `component main {public [...]}` order in Circuit/circom/flexible_kyc.circom */
-export const FLEXIBLE_KYC_PUBLIC_SIGNAL_COUNT = 16;
+export const FLEXIBLE_KYC_PUBLIC_SIGNAL_COUNT = 17;
+/** Must match Circuit/circom/flexible_kyc_commitment.circom public order */
+export const FLEXIBLE_KYC_COMMITMENT_PUBLIC_SIGNAL_COUNT = 18;
+
+/**
+ * Nonce in requests is generated as base64url random bytes in the frontend.
+ * The circuit expects a numeric field element `nonce`, so we convert the same
+ * bytes to a big-endian decimal string.
+ */
+export function nonceBase64UrlToFieldElementDecimal(nonce: string | null | undefined): string {
+  if (!nonce) return "0";
+  // base64url -> standard base64
+  const b64 = nonce.replace(/-/g, "+").replace(/_/g, "/");
+  const padLen = (4 - (b64.length % 4)) % 4;
+  const padded = b64 + "=".repeat(padLen);
+  const bin = atob(padded);
+  let v = 0n;
+  for (let i = 0; i < bin.length; i++) {
+    v = (v << 8n) + BigInt(bin.charCodeAt(i)!);
+  }
+  return v.toString();
+}
 
 /** UTC calendar year for `current_year` in the circuit — tied to request creation time. */
 export function kycAnchorYearUtc(createdAtMs: number): number {
@@ -64,11 +85,14 @@ export function extractBirthYearFromDob(dob: string): number {
 
 export type FlexibleKycFullInput = Record<string, string>;
 
+export type FlexibleKycCommitmentFullInput = Record<string, string>;
+
 /** Public inputs only, in publicSignals order (for verifier-side checks). */
 export function encodeFlexibleKycPublicSignals(params: {
   createdAtMs: number;
   checks: VerificationType[];
   constraints: KycConstraints;
+  nonce?: string | null;
 }): string[] {
   const currentYear = kycAnchorYearUtc(params.createdAtMs);
   const { checks, constraints } = params;
@@ -90,6 +114,7 @@ export function encodeFlexibleKycPublicSignals(params: {
     }
   }
   const s = (n: number) => String(n);
+  const nonceFe = nonceBase64UrlToFieldElementDecimal(params.nonce);
   return [
     s(currentYear),
     s(min_age),
@@ -107,6 +132,7 @@ export function encodeFlexibleKycPublicSignals(params: {
     s(check_age),
     s(check_gender),
     s(check_address),
+    nonceFe,
   ];
 }
 
@@ -120,6 +146,7 @@ export function buildFlexibleKycInput(params: {
   currentYear: number;
   checks: VerificationType[];
   constraints: KycConstraints;
+  nonce?: string | null;
 }): FlexibleKycFullInput {
   const { dob, genderRaw, address, currentYear, checks, constraints } = params;
 
@@ -159,6 +186,7 @@ export function buildFlexibleKycInput(params: {
   }
 
   const toStr = (n: number) => String(n);
+  const nonceFe = nonceBase64UrlToFieldElementDecimal(params.nonce);
 
   return {
     dob_year: toStr(dob_year),
@@ -180,6 +208,26 @@ export function buildFlexibleKycInput(params: {
     check_age: toStr(check_age),
     check_gender: toStr(check_gender),
     check_address: toStr(check_address),
+    nonce: nonceFe,
+  };
+}
+
+export function buildFlexibleKycCommitmentInput(params: {
+  dob: string;
+  genderRaw: string;
+  address: string;
+  currentYear: number;
+  checks: VerificationType[];
+  constraints: KycConstraints;
+  faceHash: string;
+  commitment: string;
+  nonce?: string | null;
+}): FlexibleKycCommitmentFullInput {
+  const base = buildFlexibleKycInput(params);
+  return {
+    ...base,
+    face_hash: String(params.faceHash),
+    commitment: String(params.commitment),
   };
 }
 
@@ -192,6 +240,7 @@ export function publicSignalsMatchRequest(
     createdAtMs: number;
     checks: VerificationType[];
     constraints: KycConstraints;
+    nonce?: string | null;
   },
 ): boolean {
   if (publicSignals.length !== FLEXIBLE_KYC_PUBLIC_SIGNAL_COUNT) return false;

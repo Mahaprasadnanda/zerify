@@ -1,14 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { get, onValue, ref, update } from "firebase/database";
 import { firebaseDb } from "@/lib/firebaseClient";
 import { gendersMatch } from "@/lib/genderNormalize";
 import { decodeQrFromFile } from "@/utils/qrDecoder";
-import { verifyAadhaarSecureQr } from "@/utils/aadhaarVerifier";
-import { generateFlexibleKycProof } from "@/utils/flexibleKycProof";
+import { normalizeSecureQrPayload, verifyAadhaarSecureQr } from "@/utils/aadhaarVerifier";
 import { kycAnchorYearUtc } from "@/utils/flexibleKycWitness";
+import { poseidonHash } from "@/utils/poseidon";
+import {
+  aadhaarGenderToCircuitCodeSync,
+  extractBirthYearFromDob,
+  pickWitnessPincode,
+} from "@/utils/flexibleKycWitness";
 
 type VerificationType = "age" | "gender" | "address";
 
@@ -19,9 +24,10 @@ type KycConstraints = {
 };
 
 type ZkStoredProof = {
-  version: 1;
-  scheme: "groth16-flexible-kyc";
+  version: 1 | 2;
+  scheme: "groth16-flexible-kyc" | "groth16-flexible-kyc-commitment";
   createdAt: number;
+  nonce?: string;
   proof: Record<string, unknown>;
   publicSignals: string[];
 };
@@ -46,6 +52,8 @@ type KycRequest = {
   checks: VerificationType[];
   constraints: KycConstraints;
   purpose?: string;
+  nonce?: string;
+  security?: { requireCommitment?: boolean; nonce?: string };
   createdAt: number;
   users: Record<string, KycUserState>;
 };
@@ -58,7 +66,19 @@ type UserRequestIndexEntry = {
   checks?: VerificationType[];
   constraints?: KycConstraints;
   purpose?: string;
+  nonce?: string;
+  security?: { requireCommitment?: boolean; nonce?: string };
 };
+
+/** Lazy-load snarkjs/ffjavascript only when proving — smaller initial graph, fewer webpack chunk issues. */
+let flexibleKycProofModulePromise: Promise<typeof import("@/utils/flexibleKycProof")> | null = null;
+
+function loadFlexibleKycProofModule() {
+  if (!flexibleKycProofModulePromise) {
+    flexibleKycProofModulePromise = import("@/utils/flexibleKycProof");
+  }
+  return flexibleKycProofModulePromise;
+}
 
 function phoneDigitsOnly(phone: string): string {
   return phone.replace(/\D/g, "");
@@ -136,6 +156,8 @@ function mergeRequestForProver(
       checks: indexEntry.checks!,
       constraints: indexEntry.constraints!,
       purpose: indexEntry.purpose,
+      nonce: indexEntry.nonce,
+      security: indexEntry.security,
       users: { [phoneE164]: defaultEmptyUserState() },
     };
   }
@@ -219,7 +241,11 @@ function StatusRow({
 
   return (
     <div className={`flex items-center justify-between gap-4 text-sm ${cls}`}>
-      <span>{label}</span>
+      <span className="flex items-center gap-2">
+        {tone === "ok" ? <span aria-hidden="true">✓</span> : null}
+        {tone === "error" ? <span aria-hidden="true">✕</span> : null}
+        {label}
+      </span>
       {busy ? <Spinner /> : null}
     </div>
   );
@@ -232,6 +258,7 @@ export default function KycRequestPage({
 }) {
   const router = useRouter();
   const requestId = params.request_id;
+  const faceMatchingBaseUrl = process.env.NEXT_PUBLIC_FACE_MATCHING_URL ?? "http://localhost:3010";
 
   const [fullRequest, setFullRequest] = useState<KycRequest | null>(null);
   const [indexEntry, setIndexEntry] = useState<UserRequestIndexEntry | null>(null);
@@ -250,6 +277,13 @@ export default function KycRequestPage({
     genderPass?: boolean;
     addressPass?: boolean;
     reason?: string;
+    /** Duplicated here so the UI always has extraction data in the same update as pass/fail. */
+    extracted?: {
+      name: string;
+      dob: string;
+      gender: string;
+      address: string;
+    };
   }>(null);
 
   /** Shown after successful UIDAI verification (local only). */
@@ -263,9 +297,25 @@ export default function KycRequestPage({
   const [proofBusy, setProofBusy] = useState(false);
   const [proofError, setProofError] = useState<string | null>(null);
   const [proofOk, setProofOk] = useState<string | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraBusy, setCameraBusy] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [scanMethod, setScanMethod] = useState<string | null>(null);
+  const [riskStatus, setRiskStatus] = useState<"verified" | "suspicious">("suspicious");
+  const [faceVerificationPassed, setFaceVerificationPassed] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
     try {
+      const sp = new URLSearchParams(window.location.search);
+      const token = sp.get("session_token");
+      if (token) {
+        const padded = token.replace(/-/g, "+").replace(/_/g, "/");
+        const normalized = padded + "=".repeat((4 - (padded.length % 4)) % 4);
+        const decoded = decodeURIComponent(escape(atob(normalized)));
+        localStorage.setItem(STORAGE_KEYS.userSession, decoded);
+      }
       const raw = localStorage.getItem(STORAGE_KEYS.userSession);
       if (raw) {
         const parsed = JSON.parse(raw) as { phone: string };
@@ -275,6 +325,43 @@ export default function KycRequestPage({
       setSessionPhone(null);
     }
   }, []);
+
+  useEffect(() => {
+    return () => {
+      stopCamera();
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
+
+  useEffect(() => {
+    const key = `kyc_face_match_${requestId}`;
+    const sp = new URLSearchParams(window.location.search);
+    const cb = sp.get("face_match");
+    if (cb) {
+      const passed = cb === "passed";
+      setFaceVerificationPassed(passed);
+      setRiskStatus(passed ? "verified" : "suspicious");
+      try {
+        localStorage.setItem(key, passed ? "passed" : "failed");
+      } catch {}
+      const cleaned = new URL(window.location.href);
+      cleaned.searchParams.delete("face_match");
+      cleaned.searchParams.delete("sim");
+      cleaned.searchParams.delete("dist");
+      cleaned.searchParams.delete("phone");
+      cleaned.searchParams.delete("session_token");
+      window.history.replaceState({}, "", cleaned.toString());
+      return;
+    }
+    try {
+      const v = localStorage.getItem(key);
+      const passed = v === "passed";
+      setFaceVerificationPassed(passed);
+      setRiskStatus(passed ? "verified" : "suspicious");
+    } catch {
+      setFaceVerificationPassed(false);
+    }
+  }, [requestId]);
 
   useEffect(() => {
     if (!sessionPhone || !requestId) return;
@@ -332,6 +419,12 @@ export default function KycRequestPage({
     return getUserStateForPhone(request.users, sessionPhone);
   }, [request, sessionPhone]);
 
+  /** Prefer extraction bundled on checks (same React update as pass/fail); fallback for older state. */
+  const displayExtracted = useMemo(
+    () => checksResult?.extracted ?? extractedFields,
+    [checksResult?.extracted, extractedFields],
+  );
+
   const constraintsSummary = useMemo(() => {
     if (!request) return [];
     const items: string[] = [];
@@ -345,16 +438,118 @@ export default function KycRequestPage({
     return items;
   }, [request]);
 
+  const showMessage = (nextError: string | null, nextOk: string | null) => {
+    setError(nextError);
+    setProofOk(nextOk);
+  };
+
+  const showPreview = (file: File) => {
+    setFileName(file.name);
+    setScanMethod(null);
+    setChecksResult(null);
+    setUidaiValid(null);
+    setExtractedFields(null);
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl(URL.createObjectURL(file));
+    setFaceVerificationPassed(false);
+    setRiskStatus("suspicious");
+    try {
+      localStorage.removeItem(`kyc_face_match_${requestId}`);
+    } catch {}
+  };
+
+  const stopCamera = () => {
+    const stream = streamRef.current;
+    if (stream) {
+      stream.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setCameraOpen(false);
+  };
+
+  const startCamera = async () => {
+    setError(null);
+    setCameraBusy(true);
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error("No camera available in this browser. Please use Upload Image.");
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+        audio: false,
+      });
+      streamRef.current = stream;
+      setCameraOpen(true);
+      requestAnimationFrame(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          void videoRef.current.play().catch(() => {});
+        }
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Could not access camera.";
+      if (/denied|permission/i.test(msg)) {
+        setError("Camera permission denied. Please allow access or use Upload Image.");
+      } else {
+        setError(msg);
+      }
+      stopCamera();
+    } finally {
+      setCameraBusy(false);
+    }
+  };
+
+  const sendToBackend = async (file: File): Promise<{ qrData: string; method?: string }> => {
+    const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").replace(/\/$/, "");
+    const url = apiBase ? `${apiBase}/scan-aadhaar` : "/scan-aadhaar";
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await fetch(url, {
+      method: "POST",
+      body: formData,
+    });
+    let body: {
+      success?: boolean;
+      qr_data?: string;
+      message?: string;
+      method?: string;
+    } = {};
+    try {
+      body = (await res.json()) as typeof body;
+    } catch {
+      // ignore non-json
+    }
+    if (!res.ok || !body.success || !body.qr_data) {
+      throw new Error(body.message || "QR not detected, try again.");
+    }
+    return { qrData: body.qr_data, method: body.method };
+  };
+
   const startProcessing = async (file: File) => {
     setError(null);
     setBusy(true);
     setUidaiValid(null);
     setChecksResult(null);
     setExtractedFields(null);
+    setProofOk(null);
 
     try {
-      const payload = await decodeQrFromFile(file);
-      if (!payload) throw new Error("No readable QR found.");
+      let payload: string | null = null;
+      let methodLabel: string | null = null;
+      try {
+        const backendScan = await sendToBackend(file);
+        payload = backendScan.qrData;
+        methodLabel = backendScan.method ?? "backend";
+      } catch {
+        payload = await decodeQrFromFile(file);
+        methodLabel = payload ? "local-fallback" : null;
+      }
+      if (!payload) throw new Error("QR not detected, try again.");
+      payload = normalizeSecureQrPayload(payload);
+      setScanMethod(methodLabel);
 
       const verification = await verifyAadhaarSecureQr(payload);
       setUidaiValid(verification.isValid);
@@ -370,31 +565,32 @@ export default function KycRequestPage({
         return;
       }
 
-      setExtractedFields({
+      const extracted = {
         name: name ?? "—",
         dob,
         gender,
         address,
-      });
+      };
+      setExtractedFields(extracted);
 
       const age = computeAgeFromDob(dob);
 
-      const ageActive = request?.checks.includes("age");
-      const genderActive = request?.checks.includes("gender");
-      const addressActive = request?.checks.includes("address");
+      const ageActive = Boolean(request?.checks?.includes("age"));
+      const genderActive = Boolean(request?.checks?.includes("gender"));
+      const addressActive = Boolean(request?.checks?.includes("address"));
 
-      const agePass = ageActive ? age.age >= (request?.constraints.minAge ?? 18) : undefined;
+      const minAge = request?.constraints?.minAge ?? 18;
+      const requiredGender = request?.constraints?.requiredGender;
+      const pincodes = request?.constraints?.pincodes ?? [];
+
+      const agePass = ageActive ? age.age >= minAge : undefined;
       const genderPass =
-        genderActive && request?.constraints.requiredGender
-          ? gendersMatch(gender, request.constraints.requiredGender)
-          : undefined;
+        genderActive && requiredGender ? gendersMatch(gender, requiredGender) : undefined;
       const addressPass =
-        addressActive && request?.constraints.pincodes.length
-          ? addressMatchesAnyAllowedPincode(address, request.constraints.pincodes)
-          : undefined;
+        addressActive && pincodes.length ? addressMatchesAnyAllowedPincode(address, pincodes) : undefined;
 
       let reason: string | undefined;
-      if (ageActive && agePass === false) reason = `Age requirement not met (need ≥ ${request?.constraints.minAge ?? 18}).`;
+      if (ageActive && agePass === false) reason = `Age requirement not met (need ≥ ${minAge}).`;
       if (!reason && genderActive && genderPass === false) reason = "Gender mismatch.";
       if (!reason && addressActive && addressPass === false) reason = "Address not in allowed region (pincode mismatch).";
 
@@ -403,49 +599,182 @@ export default function KycRequestPage({
         genderPass,
         addressPass,
         reason: reason ?? undefined,
+        extracted,
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Processing failed.");
+      showMessage(e instanceof Error ? e.message : "Processing failed.", null);
     } finally {
       setBusy(false);
     }
   };
 
+  const handleUpload = async (file: File) => {
+    showPreview(file);
+    await startProcessing(file);
+  };
+
+  const captureImage = async () => {
+    if (!videoRef.current) return;
+    const video = videoRef.current;
+    const width = video.videoWidth;
+    const height = video.videoHeight;
+    if (!width || !height) {
+      setError("Camera is not ready. Please try again.");
+      return;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      setError("Could not capture image.");
+      return;
+    }
+    ctx.drawImage(video, 0, 0, width, height);
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob((b) => resolve(b), "image/jpeg", 0.92),
+    );
+    stopCamera();
+    if (!blob) {
+      setError("Could not capture image.");
+      return;
+    }
+    const captured = new File([blob], `aadhaar-capture-${Date.now()}.jpg`, {
+      type: "image/jpeg",
+    });
+    await handleUpload(captured);
+  };
+
   const canSubmitZk =
     Boolean(request) &&
     uidaiValid === true &&
-    extractedFields &&
+    displayExtracted &&
     checksResult &&
     !checksResult.reason &&
-    sessionPhone;
+    sessionPhone &&
+    (!request?.security?.requireCommitment || faceVerificationPassed);
+
+  const proofDisabledReason = useMemo(() => {
+    if (myUserState?.proof) return null;
+    if (!sessionPhone) return "Log in with your phone number.";
+    if (!request) return "Loading this KYC request…";
+    if (busy) return "Processing Aadhaar image…";
+    if (uidaiValid === false) return "UIDAI signature did not verify. Use a sharp photo of the secure QR on the back.";
+    if (checksResult?.reason) return `Fix this first: ${checksResult.reason}`;
+    if (uidaiValid === true && !displayExtracted) return "Extraction failed to show — try re-uploading the image.";
+    if (request.security?.requireCommitment && !faceVerificationPassed) {
+      return "This request requires face verification. Open the Face Matching App, complete liveness + 5-frame match, then return here.";
+    }
+    if (uidaiValid === true && displayExtracted && !checksResult?.reason && sessionPhone) return null;
+    return "Upload your Aadhaar and complete the steps above.";
+  }, [
+    myUserState?.proof,
+    sessionPhone,
+    request,
+    busy,
+    uidaiValid,
+    checksResult?.reason,
+    displayExtracted,
+    request?.security?.requireCommitment,
+    faceVerificationPassed,
+  ]);
 
   const handleSubmitZkProof = async () => {
-    if (!request || !sessionPhone || !extractedFields) return;
+    if (!request || !sessionPhone || !displayExtracted) return;
     setProofError(null);
     setProofOk(null);
     setProofBusy(true);
     try {
+      const { generateFlexibleKycProof, generateFlexibleKycCommitmentProof } =
+        await loadFlexibleKycProofModule();
       const anchorYear = kycAnchorYearUtc(request.createdAt);
-      const { proof, publicSignals } = await generateFlexibleKycProof({
-        dob: extractedFields.dob,
-        genderRaw: extractedFields.gender,
-        address: extractedFields.address,
-        checks: request.checks,
-        constraints: request.constraints,
-        anchorYear,
-      });
+      const faceHash = undefined;
+      let proof: Record<string, unknown>;
+      let publicSignals: string[];
+      let scheme: ZkStoredProof["scheme"] = "groth16-flexible-kyc";
+      let version: ZkStoredProof["version"] = 1;
+
+      if (faceHash) {
+        // commitment = Poseidon(dob_year, gender_code, witness_pincode, face_hash)
+        // dob_year/gender/pincode are private in-circuit; only commitment is public.
+        // We compute it here so the public signal is fixed and verifier can see binding exists.
+        const dobYear = extractBirthYearFromDob(displayExtracted.dob);
+        const genderCode = aadhaarGenderToCircuitCodeSync(displayExtracted.gender);
+        const pincodeWitness = request.checks.includes("address")
+          ? pickWitnessPincode(displayExtracted.address, request.constraints?.pincodes ?? [])
+          : 0;
+        const commitment = await poseidonHash([
+          BigInt(dobYear),
+          BigInt(genderCode),
+          BigInt(pincodeWitness),
+          BigInt(faceHash),
+        ]);
+        try {
+          const res = await generateFlexibleKycCommitmentProof({
+            dob: displayExtracted.dob,
+            genderRaw: displayExtracted.gender,
+            address: displayExtracted.address,
+            checks: request.checks,
+            constraints: request.constraints,
+            anchorYear,
+            faceHash,
+            commitment,
+            nonce: request.nonce ?? request.security?.nonce,
+          });
+          proof = res.proof;
+          publicSignals = res.publicSignals;
+          scheme = "groth16-flexible-kyc-commitment";
+          version = 2;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "Commitment proof generation failed.";
+          const isArtifactMissing = /Missing ZKP artifact/i.test(msg);
+          if (isArtifactMissing) {
+            // Non-blocking fallback: keep v1 proving working, but mark as suspicious because commitment binding was intended.
+            setProofError(
+              `${msg} Falling back to standard proof (we recommend re-running compile-flexible-kyc-commitment.ps1).`,
+            );
+            setRiskStatus("suspicious");
+          } else {
+            throw e;
+          }
+          const res = await generateFlexibleKycProof({
+            dob: displayExtracted.dob,
+            genderRaw: displayExtracted.gender,
+            address: displayExtracted.address,
+            checks: request.checks,
+            constraints: request.constraints,
+            anchorYear,
+            nonce: request.nonce ?? request.security?.nonce,
+          });
+          proof = res.proof;
+          publicSignals = res.publicSignals;
+          scheme = "groth16-flexible-kyc";
+          version = 1;
+        }
+      } else {
+        const res = await generateFlexibleKycProof({
+          dob: displayExtracted.dob,
+          genderRaw: displayExtracted.gender,
+          address: displayExtracted.address,
+          checks: request.checks,
+          constraints: request.constraints,
+          anchorYear,
+          nonce: request.nonce ?? request.security?.nonce,
+        });
+        proof = res.proof;
+        publicSignals = res.publicSignals;
+      }
 
       const payload: ZkStoredProof = {
-        version: 1,
-        scheme: "groth16-flexible-kyc",
+        version,
+        scheme,
         createdAt: Date.now(),
+        nonce: request.nonce ?? request.security?.nonce,
         proof,
         publicSignals,
       };
 
-      await update(ref(firebaseDb, `kycRequests/${request.requestId}/users/${sessionPhone}`), {
-        proof: payload,
-      });
+      await update(ref(firebaseDb, `kycRequests/${request.requestId}/users/${sessionPhone}/proof`), payload);
       setProofOk("Proof generated and saved. The verifier can confirm it against the backend.");
     } catch (e) {
       setProofError(e instanceof Error ? e.message : "Proof generation failed.");
@@ -453,6 +782,43 @@ export default function KycRequestPage({
       setProofBusy(false);
     }
   };
+
+  const faceMatchingUrl = useMemo(() => {
+    if (typeof window === "undefined") return faceMatchingBaseUrl;
+    // After logout (or completion), always return to prover launcher (not back to this sensitive flow page).
+    const returnUrl = `${window.location.origin}/prover`;
+    let resolvedBase = faceMatchingBaseUrl;
+    try {
+      const candidate = new URL(faceMatchingBaseUrl);
+      // Prevent login-loop misrouting when configured URL points to the main app root.
+      if (
+        candidate.origin === window.location.origin &&
+        (candidate.pathname === "/" || candidate.pathname === "")
+      ) {
+        resolvedBase = "http://localhost:3010";
+      }
+    } catch {
+      resolvedBase = "http://localhost:3010";
+    }
+    const u = new URL(resolvedBase);
+    u.searchParams.set("request_id", requestId);
+    if (sessionPhone) u.searchParams.set("phone", sessionPhone);
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.userSession);
+      if (raw) {
+        const token = btoa(unescape(encodeURIComponent(raw)))
+          .replace(/\+/g, "-")
+          .replace(/\//g, "_")
+          .replace(/=+$/, "");
+        u.searchParams.set("session_token", token);
+      }
+    } catch {
+      // ignore storage encoding failures
+    }
+    u.searchParams.set("return_url", returnUrl);
+    u.searchParams.set("source", "kyc");
+    return u.toString();
+  }, [faceMatchingBaseUrl, requestId, sessionPhone]);
 
   return (
     <main className="min-h-screen surface">
@@ -536,33 +902,10 @@ export default function KycRequestPage({
                 </p>
 
                 <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/30 p-5">
-                  <label className="flex cursor-pointer items-center justify-between gap-4">
-                    <div className="space-y-1">
-                      <div className="text-sm font-semibold text-slate-100">QR image</div>
-                      <div className="text-sm text-slate-400">{fileName || "PNG/JPG"}</div>
-                    </div>
-                    <span className="btn-primary shimmer rounded-2xl px-6 py-3 text-sm font-semibold text-slate-950 shadow-[0_12px_48px_rgba(56,189,248,0.22)]">
-                      Choose file
-                    </span>
-                    <input
-                      type="file"
-                      accept="image/png,image/jpeg,image/jpg"
-                      className="sr-only"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        setFileName(file.name);
-                        void startProcessing(file);
-                      }}
-                    />
-                  </label>
-                </div>
-
-                <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/30 p-5">
                   <h3 className="text-sm font-semibold text-slate-100">Progress</h3>
                   <div className="mt-3 grid gap-2">
                     <StatusRow
-                      label="UIDAI signature"
+                      label="QR detection + UIDAI signature"
                       tone={uidaiValid === null ? "pending" : uidaiValid ? "ok" : "error"}
                       busy={busy && uidaiValid === null}
                     />
@@ -572,39 +915,118 @@ export default function KycRequestPage({
                       busy={busy && checksResult === null}
                     />
                   </div>
+
+                  {checksResult?.reason ? (
+                    <div className="mt-4 rounded-2xl border border-rose-400/30 bg-rose-500/10 p-4 text-sm text-rose-100">
+                      {checksResult.reason}
+                    </div>
+                  ) : null}
+
+                  {scanMethod ? (
+                    <div className="mt-4 rounded-2xl border border-sky-400/30 bg-sky-500/10 p-4 text-sm text-sky-100">
+                      QR detected successfully ({scanMethod}).
+                    </div>
+                  ) : null}
+
+                  {uidaiValid === true && displayExtracted ? (
+                    <div className="mt-4 rounded-2xl border border-emerald-400/35 bg-emerald-500/10 p-5 text-sm text-emerald-50">
+                      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-200/90">
+                        UIDAI signature verified — extracted fields (local only)
+                      </div>
+                      <dl className="mt-3 grid gap-2 text-slate-100">
+                        <div>
+                          <dt className="text-xs text-emerald-200/80">Name</dt>
+                          <dd className="font-medium">{displayExtracted.name}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs text-emerald-200/80">Date of birth</dt>
+                          <dd className="font-medium">{displayExtracted.dob}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs text-emerald-200/80">Gender</dt>
+                          <dd className="font-medium">{displayExtracted.gender}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs text-emerald-200/80">Address</dt>
+                          <dd className="leading-relaxed">{displayExtracted.address}</dd>
+                        </div>
+                      </dl>
+                    </div>
+                  ) : null}
                 </div>
 
-                {checksResult?.reason ? (
-                  <div className="mt-5 rounded-2xl border border-rose-400/30 bg-rose-500/10 p-4 text-sm text-rose-100">
-                    {checksResult.reason}
-                  </div>
-                ) : null}
-
-                {uidaiValid === true && extractedFields ? (
-                  <div className="mt-5 rounded-2xl border border-emerald-400/35 bg-emerald-500/10 p-5 text-sm text-emerald-50">
-                    <div className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-200/90">
-                      UIDAI signature verified — extracted fields (local only)
+                <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/30 p-5">
+                  <div className="space-y-4">
+                    <div className="space-y-1">
+                      <div className="text-sm font-semibold text-slate-100">Aadhaar image source</div>
+                      <div className="text-sm text-slate-400">{fileName || "Upload or capture an image"}</div>
                     </div>
-                    <dl className="mt-3 grid gap-2 text-slate-100">
-                      <div>
-                        <dt className="text-xs text-emerald-200/80">Name</dt>
-                        <dd className="font-medium">{extractedFields.name}</dd>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="btn-primary shimmer inline-flex cursor-pointer items-center justify-center rounded-2xl px-6 py-3 text-sm font-semibold text-slate-950 shadow-[0_12px_48px_rgba(56,189,248,0.22)]">
+                        Upload Image
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/jpg,image/*"
+                          className="sr-only"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            void handleUpload(file);
+                          }}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="rounded-2xl border border-slate-700 bg-slate-900/40 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-slate-600 disabled:opacity-50"
+                        onClick={() => void startCamera()}
+                        disabled={cameraBusy || cameraOpen}
+                      >
+                        {cameraBusy ? "Opening camera…" : "Capture Image"}
+                      </button>
+                    </div>
+
+                    {cameraOpen ? (
+                      <div className="space-y-3 rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                        <video
+                          ref={videoRef}
+                          className="h-auto max-h-80 w-full rounded-xl bg-black object-contain"
+                          playsInline
+                          muted
+                          autoPlay
+                        />
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <button
+                            type="button"
+                            className="btn-primary shimmer rounded-2xl px-5 py-3 text-sm font-semibold text-slate-950"
+                            onClick={() => void captureImage()}
+                          >
+                            Capture
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-2xl border border-slate-700 bg-slate-900/50 px-5 py-3 text-sm font-semibold text-slate-100 hover:border-slate-600"
+                            onClick={stopCamera}
+                          >
+                            Close Camera
+                          </button>
+                        </div>
                       </div>
-                      <div>
-                        <dt className="text-xs text-emerald-200/80">Date of birth</dt>
-                        <dd className="font-medium">{extractedFields.dob}</dd>
+                    ) : null}
+
+                    {previewUrl ? (
+                      <div className="space-y-2 rounded-2xl border border-slate-700 bg-slate-900/30 p-3">
+                        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                          Preview
+                        </div>
+                        <img
+                          src={previewUrl}
+                          alt="Selected Aadhaar preview"
+                          className="h-auto max-h-72 w-full rounded-xl object-contain"
+                        />
                       </div>
-                      <div>
-                        <dt className="text-xs text-emerald-200/80">Gender</dt>
-                        <dd className="font-medium">{extractedFields.gender}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-xs text-emerald-200/80">Address</dt>
-                        <dd className="leading-relaxed">{extractedFields.address}</dd>
-                      </div>
-                    </dl>
+                    ) : null}
                   </div>
-                ) : null}
+                </div>
 
                 {myUserState?.proof ? (
                   <div className="mt-5 rounded-2xl border border-sky-400/30 bg-sky-500/10 p-4 text-sm text-sky-100">
@@ -624,21 +1046,52 @@ export default function KycRequestPage({
                 ) : null}
 
                 <div className="mt-6 grid gap-3">
+                  <div className="rounded-[2rem] border border-slate-800 bg-slate-950/40 p-6 shadow-soft">
+                    <div className="text-sm font-semibold text-slate-100">Face matching (separate local app)</div>
+                    <div className="mt-1 text-sm text-slate-300">
+                      Aadhaar QR verification and KYC checks continue here. Liveness + 5-frame face matching runs in your dedicated
+                      <code className="rounded bg-black/20 px-1">face_matching</code> frontend.
+                    </div>
+                    <div className="mt-4">
+                      <a
+                        href={faceMatchingUrl}
+                        className="btn-primary shimmer inline-flex rounded-2xl px-5 py-3 text-sm font-semibold text-slate-950"
+                      >
+                        Open Face Matching App
+                      </a>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-800 bg-slate-950/30 p-4 text-sm text-slate-200">
+                    <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                      Face verification status
+                    </div>
+                    <div className="mt-1 font-semibold">
+                      {faceVerificationPassed ? "verified" : "pending"}
+                    </div>
+                    <div className="mt-2 text-xs text-slate-400">
+                      {faceVerificationPassed
+                        ? "Face verification callback received from Face Matching App."
+                        : "Open Face Matching App, complete liveness + 5-frame comparison, then return here."}
+                    </div>
+                    {request.security?.requireCommitment ? (
+                      <div className="mt-2 text-xs text-amber-200">
+                        Commitment proof requires face verification to be marked verified.
+                      </div>
+                    ) : null}
+                  </div>
+
                   <button
                     type="button"
-                    disabled={!canSubmitZk || proofBusy || Boolean(myUserState?.proof)}
-                    title={
-                      !canSubmitZk
-                        ? "Complete UIDAI verification and satisfy all requested checks first."
-                        : myUserState?.proof
-                          ? "Proof already submitted."
-                          : undefined
-                    }
-                    onClick={() => void handleSubmitZkProof()}
+                    disabled
+                    title="Proof flow moved to Face Matching App"
                     className="btn-primary shimmer rounded-2xl px-6 py-4 text-base font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
                   >
-                    {proofBusy ? "Generating proof…" : "Generate proof & send to verifier"}
+                    Generate proof & send to verifier (moved)
                   </button>
+                  <p className="text-center text-xs text-amber-200/90">
+                    Complete the entire flow in Face Matching App. Proof submission from this page is disabled.
+                  </p>
                   <p className="text-center text-xs text-slate-500">
                     One Groth16 proof covers every check on this request. Ensure{" "}
                     <code className="rounded bg-black/25 px-1">scripts/compile-flexible-kyc.ps1</code> has been run so{" "}
