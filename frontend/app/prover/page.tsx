@@ -10,10 +10,6 @@ const STORAGE_KEYS = {
 
 type UserSession = { phone: string; verifiedAt: number };
 
-function buildCleanProverReturnUrl(): string {
-  return new URL("/prover", window.location.origin).toString();
-}
-
 export default function ProverPage() {
   const faceMatchingBaseUrl =
     process.env.NEXT_PUBLIC_FACE_MATCHING_URL ?? "http://localhost:3010";
@@ -141,7 +137,7 @@ export default function ProverPage() {
     const u = new URL(resolvedBase);
     u.searchParams.set("request_id", reqId);
     u.searchParams.set("phone", session.phone);
-    u.searchParams.set("return_url", buildCleanProverReturnUrl());
+    u.searchParams.set("return_url", window.location.href);
     try {
       const raw = sessionStorage.getItem(STORAGE_KEYS.userSession) ?? localStorage.getItem(STORAGE_KEYS.userSession);
       if (raw) {
