@@ -47,11 +47,15 @@ api = APIRouter(prefix="/api")
 # TWILIO SETUP
 # -------------------------------
 twilio_client = Client(
-    os.getenv("TWILIO_ACCOUNT_SID"),
-    os.getenv("TWILIO_AUTH_TOKEN")
+    os.getenv("TWILIO_ACCOUNT_SID") or settings.twilio_account_sid,
+    os.getenv("TWILIO_AUTH_TOKEN") or settings.twilio_auth_token,
 )
 
-VERIFY_SERVICE_SID = os.getenv("TWILIO_VERIFY_SERVICE_SID")
+VERIFY_SERVICE_SID = (
+    os.getenv("TWILIO_VERIFY_SERVICE_SID")
+    or settings.twilio_verify_service_sid
+    or settings.twilio_service_sid
+)
 
 
 class SmsSendRequest(BaseModel):
@@ -184,10 +188,14 @@ async def send_sms(payload: SmsSendRequest):
             )
             return sms_error_response(400, str(exc), invalid_phone)
 
-    account_sid = (os.getenv("TWILIO_ACCOUNT_SID") or "").strip()
-    auth_token = (os.getenv("TWILIO_AUTH_TOKEN") or "").strip()
-    messaging_service_sid = (os.getenv("TWILIO_SMS_MESSAGING_SERVICE_SID") or "").strip()
-    sms_from = (os.getenv("TWILIO_SMS_FROM") or "").strip()
+    account_sid = (os.getenv("TWILIO_ACCOUNT_SID") or settings.twilio_account_sid or "").strip()
+    auth_token = (os.getenv("TWILIO_AUTH_TOKEN") or settings.twilio_auth_token or "").strip()
+    messaging_service_sid = (
+        os.getenv("TWILIO_SMS_MESSAGING_SERVICE_SID")
+        or settings.twilio_sms_messaging_service_sid
+        or ""
+    ).strip()
+    sms_from = (os.getenv("TWILIO_SMS_FROM") or settings.twilio_sms_from or "").strip()
 
     if not account_sid or not auth_token:
         _logger.error("SMS send unavailable for requestId=%s: Twilio credentials not configured", request_id)
