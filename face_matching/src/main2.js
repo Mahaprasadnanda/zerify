@@ -87,6 +87,21 @@ const handoffPhone = params.get("phone") || "";
 const returnUrlParam = params.get("return_url") || "";
 const RETURN_URL_KEY = "zerify.faceMatching.returnUrl";
 
+function sanitizeReturnUrl(raw) {
+  if (!raw) return "";
+  try {
+    const clean = new URL(raw, window.location.origin);
+    clean.searchParams.delete("return_url");
+    clean.searchParams.delete("session_token");
+    clean.searchParams.delete("face_match");
+    clean.searchParams.delete("sim");
+    clean.searchParams.delete("dist");
+    return clean.toString();
+  } catch {
+    return "";
+  }
+}
+
 let camera = null;
 let embeddingEngine = null;
 let modelType = "arcface";
@@ -301,7 +316,8 @@ async function loadRequestContext() {
 
 async function init() {
   try {
-    if (returnUrlParam) sessionStorage.setItem(RETURN_URL_KEY, returnUrlParam);
+    const safeReturnUrl = sanitizeReturnUrl(returnUrlParam);
+    if (safeReturnUrl) sessionStorage.setItem(RETURN_URL_KEY, safeReturnUrl);
     if (sessionToken) {
       const decoded = decodeSessionToken(sessionToken);
       sessionStorage.setItem(STORAGE_KEY, decoded);
@@ -341,7 +357,7 @@ async function init() {
 }
 
 function resolveReturnUrl() {
-  const stored = sessionStorage.getItem(RETURN_URL_KEY) || "";
+  const stored = sanitizeReturnUrl(sessionStorage.getItem(RETURN_URL_KEY) || "");
   if (stored) return stored;
 
   // Optional explicit verifier URL (production-safe, no localhost defaults)
@@ -355,7 +371,7 @@ function resolveReturnUrl() {
 
   const ref = document.referrer || "";
   // If user came from another site/port, referrer is a good fallback.
-  if (ref) return ref;
+  if (ref) return sanitizeReturnUrl(ref) || ref;
 
   // Final fallback: same origin (no hardcoded port/path).
   return window.location.origin;
