@@ -8,4 +8,5 @@ numpy
 pyzbar
 pillow
 python-multipart
+twilio
 pytest>=8.0.0

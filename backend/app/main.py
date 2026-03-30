@@ -5,6 +5,8 @@ import os
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 from twilio.rest import Client
 
 from app.config import get_settings
@@ -50,6 +52,41 @@ twilio_client = Client(
 )
 
 VERIFY_SERVICE_SID = os.getenv("TWILIO_VERIFY_SERVICE_SID")
+
+
+class SmsSendRequest(BaseModel):
+    phones: list[str] = Field(default_factory=list)
+    requestId: str = ""
+
+
+def normalize_to_e164_india(raw: str) -> str:
+    digits = "".join(ch for ch in str(raw) if ch.isdigit())
+
+    if len(digits) == 10:
+        return f"+91{digits}"
+
+    if digits.startswith("91") and len(digits) == 12:
+        return f"+{digits}"
+
+    raise ValueError("Invalid phone number. Expected a valid Indian mobile number.")
+
+
+def mask_phone_number(phone: str) -> str:
+    if len(phone) <= 4:
+        return phone
+
+    return f"{phone[:3]}{'*' * max(len(phone) - 7, 0)}{phone[-4:]}"
+
+
+def sms_error_response(status_code: int, error: str, to: str = "") -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "ok": False,
+            "sent": [],
+            "failed": [{"to": to, "error": error}],
+        },
+    )
 
 # -------------------------------
 # CORS
@@ -117,6 +154,97 @@ async def verify_otp(payload: dict):
 
     except Exception as e:
         return {"success": False, "message": str(e)}
+
+# -------------------------------
+# SMS SEND
+# -------------------------------
+@api.post("/sms/send")
+async def send_sms(payload: SmsSendRequest):
+    request_id = payload.requestId.strip()
+    phones = payload.phones or []
+
+    if not request_id:
+        _logger.warning("SMS send rejected: missing requestId")
+        return sms_error_response(400, "Missing requestId")
+
+    if not phones:
+        _logger.warning("SMS send rejected for requestId=%s: missing phones", request_id)
+        return sms_error_response(400, "Missing phones")
+
+    normalized: list[str] = []
+    for phone in phones:
+        try:
+            normalized.append(normalize_to_e164_india(phone))
+        except ValueError as exc:
+            invalid_phone = str(phone)
+            _logger.warning(
+                "SMS send rejected for requestId=%s: invalid phone input=%s",
+                request_id,
+                invalid_phone,
+            )
+            return sms_error_response(400, str(exc), invalid_phone)
+
+    account_sid = (os.getenv("TWILIO_ACCOUNT_SID") or "").strip()
+    auth_token = (os.getenv("TWILIO_AUTH_TOKEN") or "").strip()
+    messaging_service_sid = (os.getenv("TWILIO_SMS_MESSAGING_SERVICE_SID") or "").strip()
+    sms_from = (os.getenv("TWILIO_SMS_FROM") or "").strip()
+
+    if not account_sid or not auth_token:
+        _logger.error("SMS send unavailable for requestId=%s: Twilio credentials not configured", request_id)
+        return sms_error_response(500, "SMS service is not configured")
+
+    if not messaging_service_sid and not sms_from:
+        _logger.error(
+            "SMS send unavailable for requestId=%s: missing messaging service SID and sender number",
+            request_id,
+        )
+        return sms_error_response(500, "SMS service is not configured")
+
+    sms_client = Client(account_sid, auth_token)
+
+    text = (
+        "You have a KYC request received. Please visit the Zerifyy site to complete KYC."
+        f" Request ID: {request_id}"
+    )
+
+    _logger.info(
+        "Sending SMS notifications for requestId=%s to=%s",
+        request_id,
+        ",".join(mask_phone_number(phone) for phone in normalized),
+    )
+
+    sent: list[str] = []
+    failed: list[dict[str, str]] = []
+
+    for to in normalized:
+        try:
+            message_args = {"to": to, "body": text}
+            if messaging_service_sid:
+                message_args["messaging_service_sid"] = messaging_service_sid
+            else:
+                message_args["from_"] = sms_from
+
+            sms_client.messages.create(**message_args)
+            sent.append(to)
+        except Exception as exc:
+            error_message = str(exc) or "Failed to send SMS"
+            failed.append({"to": to, "error": error_message})
+            _logger.exception(
+                "SMS send failed for requestId=%s to=%s",
+                request_id,
+                mask_phone_number(to),
+            )
+
+    response = {
+        "ok": len(failed) == 0,
+        "sent": sent,
+        "failed": failed,
+    }
+
+    if failed:
+        return JSONResponse(status_code=500, content=response)
+
+    return response
 
 # -------------------------------
 # AADHAAR SCAN (UNCHANGED)
