@@ -6,7 +6,7 @@ import {
   signOut,
   type User as FirebaseUser,
 } from "firebase/auth";
-import { get, onValue, ref, set, update } from "firebase/database";
+import { onValue, ref, set, update } from "firebase/database";
 import { firebaseAuth, firebaseAuthPersistenceReady, firebaseDb } from "@/lib/firebaseClient";
 import { verifyProof } from "@/lib/api";
 import { onAuthStateChanged } from "firebase/auth";
@@ -627,16 +627,6 @@ export default function VerifierPage() {
         // Defensive cleanup for legacy/mismatched key formats.
         if (digits) updates[`${INDICES.user(digits)}/${request.requestId}`] = null;
         if (digits.length === 10) updates[`${INDICES.user(`+91${digits}`)}/${request.requestId}`] = null;
-      }
-      // Extra safety: remove any stale user index row anywhere that points to this request.
-      const userIdxSnap = await get(ref(firebaseDb, "indices/userRequests"));
-      if (userIdxSnap.exists()) {
-        const allUserIdx = userIdxSnap.val() as Record<string, Record<string, unknown> | null>;
-        for (const phoneKey of Object.keys(allUserIdx ?? {})) {
-          if (allUserIdx[phoneKey] && Object.prototype.hasOwnProperty.call(allUserIdx[phoneKey]!, request.requestId)) {
-            updates[`indices/userRequests/${phoneKey}/${request.requestId}`] = null;
-          }
-        }
       }
       await withTimeout(update(ref(firebaseDb), updates), 20000, "Deleting KYC request");
       setDeleteSuccess(`Request ${request.requestId} deleted.`);
