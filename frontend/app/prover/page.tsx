@@ -14,6 +14,26 @@ function buildCleanProverReturnUrl(): string {
   return new URL("/prover", window.location.origin).toString();
 }
 
+function resolveFaceMatchingBaseUrl(configuredUrl: string): string {
+  if (typeof window === "undefined") return configuredUrl;
+
+  const fallback = new URL("/prover-app/", window.location.origin).toString();
+
+  try {
+    const candidate = new URL(configuredUrl, window.location.origin);
+    if (candidate.origin !== window.location.origin) return candidate.toString();
+
+    const normalizedPath = candidate.pathname.replace(/\/+$/, "") || "/";
+    if (normalizedPath === "/" || normalizedPath === "/prover" || normalizedPath === "/prover-app") {
+      return fallback;
+    }
+
+    return candidate.toString();
+  } catch {
+    return fallback;
+  }
+}
+
 export default function ProverPage() {
   const faceMatchingBaseUrl =
     process.env.NEXT_PUBLIC_FACE_MATCHING_URL ?? "http://localhost:3010";
@@ -125,19 +145,7 @@ export default function ProverPage() {
 
   const openFaceMatching = (reqId: string) => {
     if (!session?.phone) return;
-    let resolvedBase = faceMatchingBaseUrl;
-    try {
-      const candidate = new URL(faceMatchingBaseUrl);
-      if (
-        typeof window !== "undefined" &&
-        candidate.origin === window.location.origin &&
-        (candidate.pathname === "/" || candidate.pathname === "")
-      ) {
-        resolvedBase = "http://localhost:3010";
-      }
-    } catch {
-      resolvedBase = "http://localhost:3010";
-    }
+    const resolvedBase = resolveFaceMatchingBaseUrl(faceMatchingBaseUrl);
     const u = new URL(resolvedBase);
     u.searchParams.set("request_id", reqId);
     u.searchParams.set("phone", session.phone);

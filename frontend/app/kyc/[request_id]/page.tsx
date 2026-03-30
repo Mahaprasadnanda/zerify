@@ -80,6 +80,26 @@ function loadFlexibleKycProofModule() {
   return flexibleKycProofModulePromise;
 }
 
+function resolveFaceMatchingBaseUrl(configuredUrl: string): string {
+  if (typeof window === "undefined") return configuredUrl;
+
+  const fallback = new URL("/prover-app/", window.location.origin).toString();
+
+  try {
+    const candidate = new URL(configuredUrl, window.location.origin);
+    if (candidate.origin !== window.location.origin) return candidate.toString();
+
+    const normalizedPath = candidate.pathname.replace(/\/+$/, "") || "/";
+    if (normalizedPath === "/" || normalizedPath === "/prover" || normalizedPath === "/prover-app") {
+      return fallback;
+    }
+
+    return candidate.toString();
+  } catch {
+    return fallback;
+  }
+}
+
 function phoneDigitsOnly(phone: string): string {
   return phone.replace(/\D/g, "");
 }
@@ -797,19 +817,7 @@ export default function KycRequestPage({
     if (typeof window === "undefined") return faceMatchingBaseUrl;
     // After logout (or completion), always return to prover launcher (not back to this sensitive flow page).
     const returnUrl = `${window.location.origin}/prover`;
-    let resolvedBase = faceMatchingBaseUrl;
-    try {
-      const candidate = new URL(faceMatchingBaseUrl);
-      // Prevent login-loop misrouting when configured URL points to the main app root.
-      if (
-        candidate.origin === window.location.origin &&
-        (candidate.pathname === "/" || candidate.pathname === "")
-      ) {
-        resolvedBase = "http://localhost:3010";
-      }
-    } catch {
-      resolvedBase = "http://localhost:3010";
-    }
+    const resolvedBase = resolveFaceMatchingBaseUrl(faceMatchingBaseUrl);
     const u = new URL(resolvedBase);
     u.searchParams.set("request_id", requestId);
     if (sessionPhone) u.searchParams.set("phone", sessionPhone);
