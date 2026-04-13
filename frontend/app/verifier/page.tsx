@@ -174,7 +174,10 @@ function parseMobiles(value: string): { valid: string[]; invalid: string[] } {
 }
 
 function createRequestId() {
-  return `REQ-${Math.random().toString(36).slice(2, 6).toUpperCase()}-${Date.now().toString().slice(-4)}`;
+  if (typeof crypto.randomUUID === "function") {
+    return `REQ-${crypto.randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`;
+  }
+  return `REQ-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
 }
 
 function Pill({ children }: { children: React.ReactNode }) {
@@ -368,7 +371,7 @@ export default function VerifierPage() {
     setSending(true);
     setSendStage("Preparing request...");
     try {
-      const phoneNumbers = parsedMobiles.valid;
+      const phoneNumbers = Array.from(new Set(parsedMobiles.valid));
       if (phoneNumbers.length === 0) {
         throw new Error("Enter at least one valid mobile number.");
       }
@@ -482,7 +485,7 @@ export default function VerifierPage() {
 
       if (failedRecipients.length > 0) {
         setSendError(
-          `Created ${createdRequests.length} request(s): ${requestList}. Failed recipients: ${failedRecipients.map((item) => `${item.phone} (${item.error})`).join(", ")}`,
+          `Created ${createdRequests.length} separate request(s): ${requestList}. Failed recipients: ${failedRecipients.map((item) => `${item.phone} (${item.error})`).join(", ")}`,
         );
       }
 
@@ -494,52 +497,9 @@ export default function VerifierPage() {
       setPincodes([]);
       setPincodeInput("");
       setPurpose("");
-      return;
+ 
 
-      const requestId = createRequestId();
-      const verifierEmail = currentUser.email ?? email.trim();
-      const nonce = generateNonceBase64Url(16);
-      const payload: KycRequest = {
-        requestId,
-        nonce,
-        verifier: {
-          uid: currentUser.uid,
-          email: verifierEmail,
-          name: safeNameFromEmail(verifierEmail),
-        },
-        checks: selectedChecks,
-        constraints: {
-          minAge,
-          requiredGender: requiredGender,
-          pincodes,
-        },
-        purpose: purpose.trim(),
-        security: { requireCommitment, nonce },
-        createdAt: Date.now(),
-        users: Object.fromEntries(
-          phoneNumbers.map((p) => [
-            p,
-            {
-              proof: null,
-              verification: {
-                ageVerified: null,
-                genderVerified: null,
-                addressVerified: null,
-                verifiedAtByAttribute: {},
-              },
-            } satisfies KycUserState,
-          ]),
-        ) as Record<string, KycUserState>,
-      };
-
-      // 1) Store canonical request in RTDB
-      setSendStage("Saving request...");
-      await withTimeout(
-        set(ref(firebaseDb, `kycRequests/${requestId}`), payload),
-        15000,
-        "Saving request",
-      );
-
+      /*
       // 2) Store user indices (so prover sees this request under their phone)
       setSendStage("Saving recipients...");
       await withTimeout(
@@ -617,6 +577,7 @@ export default function VerifierPage() {
       setPincodes([]);
       setPincodeInput("");
       setPurpose("");
+      */
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to send request";
       const isTimeout = /timed out/i.test(msg);
