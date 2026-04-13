@@ -71,6 +71,12 @@ type KycRequest = {
   users: Record<string, KycUserState>;
 };
 
+type VerifierRequestIndexEntry = {
+  requestId: string;
+  createdAt?: number;
+  recipientPhone?: string;
+};
+
 function generateNonceBase64Url(bytes = 16): string {
   const buf = new Uint8Array(bytes);
   crypto.getRandomValues(buf);
@@ -260,7 +266,7 @@ export default function VerifierPage() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteSuccess, setDeleteSuccess] = useState<string | null>(null);
 
-  const [requestIds, setRequestIds] = useState<string[]>([]);
+  const [verifierRequests, setVerifierRequests] = useState<VerifierRequestIndexEntry[]>([]);
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
 
   const [request, setRequest] = useState<KycRequest | null>(null);
@@ -288,9 +294,16 @@ export default function VerifierPage() {
     if (!authUser) return;
     const idxRef = ref(firebaseDb, INDICES.verifier(authUser.uid));
     return onValue(idxRef, (snap) => {
-      const val = snap.val() as Record<string, unknown> | null;
-      const ids = val ? Object.keys(val) : [];
-      setRequestIds(ids.sort((a, b) => b.localeCompare(a)));
+      const val = snap.val() as Record<string, VerifierRequestIndexEntry> | null;
+      const rows = val
+        ? Object.entries(val).map(([requestId, entry]) => ({
+            requestId,
+            createdAt: entry?.createdAt,
+            recipientPhone: entry?.recipientPhone,
+          }))
+        : [];
+      rows.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0) || b.requestId.localeCompare(a.requestId));
+      setVerifierRequests(rows);
     });
   }, [authUser]);
 
@@ -341,7 +354,7 @@ export default function VerifierPage() {
     setLoginError(null);
     setSelectedRequestId(null);
     setRequest(null);
-    setRequestIds([]);
+    setVerifierRequests([]);
     setAuthUser(null);
     // Full navigation replaces history so “Back” does not return to a cached logged-in dashboard.
     window.location.replace("/verifier");
@@ -349,6 +362,7 @@ export default function VerifierPage() {
 
   const handleSendRequest = async () => {
     if (!authUser) return;
+    const currentUser = authUser;
     setSendError(null);
     setSendSuccess(null);
     setSending(true);
@@ -363,14 +377,133 @@ export default function VerifierPage() {
           `Invalid mobile number(s): ${parsedMobiles.invalid.join(", ")}. Use 10-digit India numbers or +91 format.`,
         );
       }
+      const batchVerifierEmail = authUser.email ?? email.trim();
+      const batchVerifierName = safeNameFromEmail(batchVerifierEmail);
+      const createdRequests: Array<{ requestId: string; phone: string; smsSent: boolean }> = [];
+      const failedRecipients: Array<{ phone: string; error: string }> = [];
+
+      for (const [index, phone] of phoneNumbers.entries()) {
+        const requestId = createRequestId();
+        const nonce = generateNonceBase64Url(16);
+        const createdAt = Date.now() + index;
+        const payload: KycRequest = {
+          requestId,
+          nonce,
+          verifier: {
+            uid: currentUser.uid,
+            email: batchVerifierEmail,
+            name: batchVerifierName,
+          },
+          checks: selectedChecks,
+          constraints: {
+            minAge,
+            requiredGender: requiredGender,
+            pincodes,
+          },
+          purpose: purpose.trim(),
+          security: { requireCommitment, nonce },
+          createdAt,
+          users: {
+            [phone]: {
+              proof: null,
+              verification: {
+                ageVerified: null,
+                genderVerified: null,
+                addressVerified: null,
+                verifiedAtByAttribute: {},
+              },
+            },
+          },
+        };
+
+        try {
+          setSendStage(`Saving request ${index + 1} of ${phoneNumbers.length}...`);
+          await withTimeout(
+            Promise.all([
+              set(ref(firebaseDb, `kycRequests/${requestId}`), payload),
+              set(ref(firebaseDb, `${INDICES.user(phone)}/${requestId}`), {
+                requestId,
+                createdAt: payload.createdAt,
+                verifierName: payload.verifier.name,
+                checks: payload.checks,
+                constraints: payload.constraints,
+                purpose: payload.purpose,
+                security: payload.security,
+                nonce: payload.nonce,
+              }),
+              set(ref(firebaseDb, `${INDICES.verifier(currentUser.uid)}/${requestId}`), {
+                requestId,
+                createdAt: payload.createdAt,
+                recipientPhone: phone,
+              }),
+              update(ref(firebaseDb, `recipientProfiles/${phone.replace(/\D/g, "")}`), {
+                phoneE164: phone,
+                updatedAt: payload.createdAt,
+              }),
+            ]),
+            15000,
+            `Saving request ${requestId}`,
+          );
+
+          setSendStage(`Sending SMS ${index + 1} of ${phoneNumbers.length}...`);
+          let smsSent = false;
+          try {
+            const res = await fetch("/api/sms/send", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ phones: [phone], requestId }),
+            });
+            const data = (await res.json()) as { ok?: boolean };
+            smsSent = res.ok && data.ok === true;
+          } catch {
+            smsSent = false;
+          }
+
+          createdRequests.push({ requestId, phone, smsSent });
+        } catch (err) {
+          failedRecipients.push({
+            phone,
+            error: err instanceof Error ? err.message : "Failed to create request",
+          });
+        }
+      }
+
+      if (createdRequests.length === 0) {
+        throw new Error(
+          failedRecipients.length > 0
+            ? `Could not create any requests. ${failedRecipients.map((item) => `${item.phone}: ${item.error}`).join(" | ")}`
+            : "Could not create any requests.",
+        );
+      }
+
+      const smsDeliveredCount = createdRequests.filter((entry) => entry.smsSent).length;
+      const requestList = createdRequests.map((entry) => `${entry.requestId} (${entry.phone})`).join(", ");
+      setSelectedRequestId(createdRequests[0]!.requestId);
+
+      if (failedRecipients.length > 0) {
+        setSendError(
+          `Created ${createdRequests.length} request(s): ${requestList}. Failed recipients: ${failedRecipients.map((item) => `${item.phone} (${item.error})`).join(", ")}`,
+        );
+      }
+
+      setSendSuccess(
+        `Created ${createdRequests.length} separate request(s). SMS sent for ${smsDeliveredCount} of ${createdRequests.length}. ${requestList}`,
+      );
+
+      setMobilesInput("");
+      setPincodes([]);
+      setPincodeInput("");
+      setPurpose("");
+      return;
+
       const requestId = createRequestId();
-      const verifierEmail = authUser.email ?? email.trim();
+      const verifierEmail = currentUser.email ?? email.trim();
       const nonce = generateNonceBase64Url(16);
       const payload: KycRequest = {
         requestId,
         nonce,
         verifier: {
-          uid: authUser.uid,
+          uid: currentUser.uid,
           email: verifierEmail,
           name: safeNameFromEmail(verifierEmail),
         },
@@ -431,7 +564,7 @@ export default function VerifierPage() {
       // 3) Store verifier index (so dashboard lists this request)
       setSendStage("Updating dashboard...");
       await withTimeout(
-        set(ref(firebaseDb, `${INDICES.verifier(authUser.uid)}/${requestId}`), {
+        set(ref(firebaseDb, `${INDICES.verifier(currentUser.uid)}/${requestId}`), {
           requestId,
           createdAt: payload.createdAt,
         }),
@@ -930,22 +1063,29 @@ export default function VerifierPage() {
                 <thead className="bg-slate-950/50 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
                   <tr>
                     <th className="px-4 py-3">Request</th>
-                    <th className="px-4 py-3">Recipients</th>
+                    <th className="px-4 py-3">Recipient</th>
                     <th className="px-4 py-3">Open</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800 bg-slate-950/20">
-                  {requestIds.length === 0 ? (
+                  {verifierRequests.length === 0 ? (
                     <tr>
                       <td className="px-4 py-6 text-slate-400" colSpan={3}>
                         No requests yet.
                       </td>
                     </tr>
                   ) : (
-                    requestIds.slice(0, 12).map((id) => (
-                      <tr key={id} className="text-slate-200">
+                    verifierRequests.slice(0, 12).map((entry) => {
+                      const id = entry.requestId;
+                      const recipientLabel =
+                        entry.recipientPhone ??
+                        (request?.requestId === entry.requestId && request
+                          ? Object.keys(request.users ?? {})[0] ?? "â€¦"
+                          : "â€¦");
+                      return (
+                      <tr key={entry.requestId} className="text-slate-200">
                         <td className="px-4 py-4">
-                          <div className="font-semibold text-slate-100">{id}</div>
+                          <div className="font-semibold text-slate-100">{entry.requestId}</div>
                         </td>
                         <td className="px-4 py-4 text-slate-300">
                           {request?.requestId === id && request
@@ -956,13 +1096,13 @@ export default function VerifierPage() {
                           <button
                             type="button"
                             className="btn-primary shimmer inline-flex rounded-2xl px-4 py-2 text-sm font-semibold text-slate-950"
-                            onClick={() => setSelectedRequestId(id)}
+                            onClick={() => setSelectedRequestId(entry.requestId)}
                           >
                             Open
                           </button>
                         </td>
                       </tr>
-                    ))
+                    )})
                   )}
                 </tbody>
               </table>
