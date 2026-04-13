@@ -421,10 +421,18 @@ export default function VerifierPage() {
         return { phone, requestId, createdAt, payload };
       });
 
-      const updates: Record<string, unknown> = {};
+      setSendStage(`Saving ${stagedRequests.length} canonical requests...`);
+      await withTimeout(
+        Promise.all(
+          stagedRequests.map((entry) => set(ref(firebaseDb, `kycRequests/${entry.requestId}`), entry.payload)),
+        ),
+        15000,
+        "Saving canonical requests",
+      );
+
+      const indexUpdates: Record<string, unknown> = {};
       for (const entry of stagedRequests) {
-        updates[`kycRequests/${entry.requestId}`] = entry.payload;
-        updates[`${INDICES.user(entry.phone)}/${entry.requestId}`] = {
+        indexUpdates[`${INDICES.user(entry.phone)}/${entry.requestId}`] = {
           requestId: entry.requestId,
           createdAt: entry.createdAt,
           verifierName,
@@ -434,17 +442,17 @@ export default function VerifierPage() {
           security: entry.payload.security,
           nonce: entry.payload.nonce,
         };
-        updates[`${INDICES.verifier(currentUser.uid)}/${entry.requestId}`] = {
+        indexUpdates[`${INDICES.verifier(currentUser.uid)}/${entry.requestId}`] = {
           requestId: entry.requestId,
           createdAt: entry.createdAt,
           recipientPhone: entry.phone,
         };
-        updates[`recipientProfiles/${entry.phone.replace(/\D/g, "")}/phoneE164`] = entry.phone;
-        updates[`recipientProfiles/${entry.phone.replace(/\D/g, "")}/updatedAt`] = entry.createdAt;
+        indexUpdates[`recipientProfiles/${entry.phone.replace(/\D/g, "")}/phoneE164`] = entry.phone;
+        indexUpdates[`recipientProfiles/${entry.phone.replace(/\D/g, "")}/updatedAt`] = entry.createdAt;
       }
 
-      setSendStage(`Saving ${stagedRequests.length} separate requests...`);
-      await withTimeout(update(ref(firebaseDb), updates), 15000, "Saving batch requests");
+      setSendStage(`Saving ${stagedRequests.length} request indices...`);
+      await withTimeout(update(ref(firebaseDb), indexUpdates), 15000, "Saving request indices");
 
       const createdRequests: Array<{ requestId: string; phone: string; smsSent: boolean }> = [];
       for (const [index, entry] of stagedRequests.entries()) {
