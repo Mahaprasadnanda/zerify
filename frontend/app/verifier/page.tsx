@@ -64,6 +64,7 @@ type KycRequest = {
   verifier: { uid: string; email: string; name: string };
   checks: VerificationType[];
   constraints: KycConstraints;
+  recipientPhone?: string;
   purpose?: string;
   nonce?: string;
   security?: { requireCommitment?: boolean; nonce?: string };
@@ -369,7 +370,7 @@ export default function VerifierPage() {
     setSendError(null);
     setSendSuccess(null);
     setSending(true);
-    setSendStage("Preparing request...");
+    setSendStage("Preparing requests...");
     try {
       const phoneNumbers = Array.from(new Set(parsedMobiles.valid));
       if (phoneNumbers.length === 0) {
@@ -380,12 +381,9 @@ export default function VerifierPage() {
           `Invalid mobile number(s): ${parsedMobiles.invalid.join(", ")}. Use 10-digit India numbers or +91 format.`,
         );
       }
-      const batchVerifierEmail = authUser.email ?? email.trim();
-      const batchVerifierName = safeNameFromEmail(batchVerifierEmail);
-      const createdRequests: Array<{ requestId: string; phone: string; smsSent: boolean }> = [];
-      const failedRecipients: Array<{ phone: string; error: string }> = [];
-
-      for (const [index, phone] of phoneNumbers.entries()) {
+      const verifierEmail = authUser.email ?? email.trim();
+      const verifierName = safeNameFromEmail(verifierEmail);
+      const stagedRequests = phoneNumbers.map((phone, index) => {
         const requestId = createRequestId();
         const nonce = generateNonceBase64Url(16);
         const createdAt = Date.now() + index;
@@ -394,15 +392,16 @@ export default function VerifierPage() {
           nonce,
           verifier: {
             uid: currentUser.uid,
-            email: batchVerifierEmail,
-            name: batchVerifierName,
+            email: verifierEmail,
+            name: verifierName,
           },
           checks: selectedChecks,
           constraints: {
             minAge,
-            requiredGender: requiredGender,
+            requiredGender,
             pincodes,
           },
+          recipientPhone: phone,
           purpose: purpose.trim(),
           security: { requireCommitment, nonce },
           createdAt,
@@ -419,78 +418,62 @@ export default function VerifierPage() {
           },
         };
 
-        try {
-          setSendStage(`Saving request ${index + 1} of ${phoneNumbers.length}...`);
-          await withTimeout(
-            Promise.all([
-              set(ref(firebaseDb, `kycRequests/${requestId}`), payload),
-              set(ref(firebaseDb, `${INDICES.user(phone)}/${requestId}`), {
-                requestId,
-                createdAt: payload.createdAt,
-                verifierName: payload.verifier.name,
-                checks: payload.checks,
-                constraints: payload.constraints,
-                purpose: payload.purpose,
-                security: payload.security,
-                nonce: payload.nonce,
-              }),
-              set(ref(firebaseDb, `${INDICES.verifier(currentUser.uid)}/${requestId}`), {
-                requestId,
-                createdAt: payload.createdAt,
-                recipientPhone: phone,
-              }),
-              update(ref(firebaseDb, `recipientProfiles/${phone.replace(/\D/g, "")}`), {
-                phoneE164: phone,
-                updatedAt: payload.createdAt,
-              }),
-            ]),
-            15000,
-            `Saving request ${requestId}`,
-          );
+        return { phone, requestId, createdAt, payload };
+      });
 
-          setSendStage(`Sending SMS ${index + 1} of ${phoneNumbers.length}...`);
-          let smsSent = false;
-          try {
-            const res = await fetch("/api/sms/send", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ phones: [phone], requestId }),
-            });
-            const data = (await res.json()) as { ok?: boolean };
-            smsSent = res.ok && data.ok === true;
-          } catch {
-            smsSent = false;
-          }
-
-          createdRequests.push({ requestId, phone, smsSent });
-        } catch (err) {
-          failedRecipients.push({
-            phone,
-            error: err instanceof Error ? err.message : "Failed to create request",
-          });
-        }
+      const updates: Record<string, unknown> = {};
+      for (const entry of stagedRequests) {
+        updates[`kycRequests/${entry.requestId}`] = entry.payload;
+        updates[`${INDICES.user(entry.phone)}/${entry.requestId}`] = {
+          requestId: entry.requestId,
+          createdAt: entry.createdAt,
+          verifierName,
+          checks: entry.payload.checks,
+          constraints: entry.payload.constraints,
+          purpose: entry.payload.purpose,
+          security: entry.payload.security,
+          nonce: entry.payload.nonce,
+        };
+        updates[`${INDICES.verifier(currentUser.uid)}/${entry.requestId}`] = {
+          requestId: entry.requestId,
+          createdAt: entry.createdAt,
+          recipientPhone: entry.phone,
+        };
+        updates[`recipientProfiles/${entry.phone.replace(/\D/g, "")}/phoneE164`] = entry.phone;
+        updates[`recipientProfiles/${entry.phone.replace(/\D/g, "")}/updatedAt`] = entry.createdAt;
       }
 
-      if (createdRequests.length === 0) {
-        throw new Error(
-          failedRecipients.length > 0
-            ? `Could not create any requests. ${failedRecipients.map((item) => `${item.phone}: ${item.error}`).join(" | ")}`
-            : "Could not create any requests.",
-        );
+      setSendStage(`Saving ${stagedRequests.length} separate requests...`);
+      await withTimeout(update(ref(firebaseDb), updates), 15000, "Saving batch requests");
+
+      const createdRequests: Array<{ requestId: string; phone: string; smsSent: boolean }> = [];
+      for (const [index, entry] of stagedRequests.entries()) {
+        setSendStage(`Sending SMS ${index + 1} of ${stagedRequests.length}...`);
+        let smsSent = false;
+        try {
+          const res = await fetch("/api/sms/send", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ phones: [entry.phone], requestId: entry.requestId }),
+          });
+          const data = (await res.json()) as { ok?: boolean };
+          smsSent = res.ok && data.ok === true;
+        } catch {
+          smsSent = false;
+        }
+
+        createdRequests.push({
+          requestId: entry.requestId,
+          phone: entry.phone,
+          smsSent,
+        });
       }
 
       const smsDeliveredCount = createdRequests.filter((entry) => entry.smsSent).length;
       const requestList = createdRequests.map((entry) => `${entry.requestId} (${entry.phone})`).join(", ");
-      setSelectedRequestId(createdRequests[0]!.requestId);
-
-      if (failedRecipients.length > 0) {
-        setSendError(
-          `Created ${createdRequests.length} separate request(s): ${requestList}. Failed recipients: ${failedRecipients.map((item) => `${item.phone} (${item.error})`).join(", ")}`,
-        );
-      }
-
+      setSelectedRequestId(stagedRequests[0]!.requestId);
       setSendSuccess(
-        `Created ${createdRequests.length} separate request(s). SMS sent for ${smsDeliveredCount} of ${createdRequests.length}. ${requestList}`,
+        `Created ${stagedRequests.length} separate request(s). SMS sent for ${smsDeliveredCount} of ${stagedRequests.length}. ${requestList}`,
       );
 
       setMobilesInput("");
