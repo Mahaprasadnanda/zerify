@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { OtpFlow } from "@/components/OtpFlow";
 import { isRegisteredUser } from "@/lib/userRegistry";
@@ -12,6 +12,11 @@ const STORAGE_KEYS = {
 export default function LoginPage() {
   const router = useRouter();
   const [warning, setWarning] = useState<string | null>(null);
+
+  useEffect(() => {
+    sessionStorage.removeItem(STORAGE_KEYS.userSession);
+    localStorage.removeItem(STORAGE_KEYS.userSession);
+  }, []);
 
   return (
     <main className="min-h-screen surface">

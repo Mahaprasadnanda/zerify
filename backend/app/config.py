@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
     redis_url: str = "redis://localhost:6379/0"
+    firebase_database_url: str = "https://zerify-a8c25-default-rtdb.asia-southeast1.firebasedatabase.app"
+    firebase_database_secret: str = ""
+    firebase_recipient_profiles_path: str = "recipientProfiles"
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
     twilio_service_sid: str = ""

@@ -2,6 +2,7 @@ import logging
 import subprocess
 from pathlib import Path
 import os
+import time
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,7 +23,7 @@ from app.schemas import (
 )
 from app.verifier import VerificationResult, verify_groth16
 from app.nonce_store import try_mark_nonce_used
-from app.user_registry import is_user_registered, mark_user_registered
+from app.user_registry import UserRegistryError, get_user_profile, mark_user_registered
 
 settings = get_settings()
 
@@ -182,22 +183,40 @@ async def verify_otp(payload: dict):
 @api.post("/users/register")
 async def register_user(payload: UserRegistrationRequest):
     phone_e164 = parse_and_normalize_phone(payload.phone)
-    registered_at = mark_user_registered(phone_e164)
+    registered_at = int(time.time() * 1000)
 
-    _logger.info("Registered user phone=%s", mask_phone_number(phone_e164))
+    try:
+        profile = mark_user_registered(phone_e164, registered_at=registered_at)
+    except UserRegistryError as exc:
+        _logger.error("User registration failed for phone=%s: %s", mask_phone_number(phone_e164), exc)
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "message": "Could not save registration right now."},
+        )
+
+    _logger.info("Registered user phone=%s in Firebase", mask_phone_number(phone_e164))
 
     return {
         "ok": True,
         "phone": phone_e164,
-        "registered": True,
-        "registeredAt": registered_at,
+        "registered": bool(profile.get("selfRegisteredAt")),
+        "registeredAt": profile.get("selfRegisteredAt", registered_at),
     }
 
 
 @api.post("/users/exists")
 async def check_registered_user(payload: UserRegistrationRequest):
     phone_e164 = parse_and_normalize_phone(payload.phone)
-    registered = is_user_registered(phone_e164)
+    try:
+        profile = get_user_profile(phone_e164)
+    except UserRegistryError as exc:
+        _logger.error("User lookup failed for phone=%s: %s", mask_phone_number(phone_e164), exc)
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "message": "Could not verify registration right now."},
+        )
+
+    registered = bool(profile.get("selfRegisteredAt"))
 
     return {
         "ok": True,

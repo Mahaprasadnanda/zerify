@@ -445,7 +445,7 @@ export default function VerifierPage() {
         Promise.all(
           phoneNumbers.map((phone) => {
             const phoneDigits = phone.replace(/\D/g, "");
-            return set(ref(firebaseDb, `recipientProfiles/${phoneDigits}`), {
+            return update(ref(firebaseDb, `recipientProfiles/${phoneDigits}`), {
               phoneE164: phone,
               updatedAt: payload.createdAt,
             });
