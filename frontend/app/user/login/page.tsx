@@ -1,33 +1,17 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { OtpFlow } from "@/components/OtpFlow";
+import { isRegisteredUser } from "@/lib/userRegistry";
 
 const STORAGE_KEYS = {
-  users: "zerify.users.v1",
   userSession: "zerify.user.session",
 } as const;
-
-type UserRecord = {
-  phone: string;
-  registeredAt: number;
-};
-
-function loadUsers(): UserRecord[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEYS.users);
-    return raw ? (JSON.parse(raw) as UserRecord[]) : [];
-  } catch {
-    return [];
-  }
-}
 
 export default function LoginPage() {
   const router = useRouter();
   const [warning, setWarning] = useState<string | null>(null);
-
-  const knownUsers = useMemo(() => loadUsers(), []);
 
   return (
     <main className="min-h-screen surface">
@@ -37,17 +21,24 @@ export default function LoginPage() {
       <div className="relative mx-auto flex min-h-screen w-full max-w-xl flex-col justify-center px-4 py-10 sm:px-6 sm:py-16">
         <OtpFlow
           title="Login as user"
-          subtitle="Enter your registered mobile number. We’ll verify it with OTP."
+          subtitle="Enter your registered mobile number. We'll verify it with OTP."
           primaryCtaLabel="Verify & continue"
-          onVerified={(phoneE164) => {
-            const isRegistered = knownUsers.some((u) => u.phone === phoneE164);
-            if (!isRegistered) {
+          onVerified={async (phoneE164) => {
+            setWarning(null);
+
+            const lookup = await isRegisteredUser(phoneE164);
+            if (!lookup.ok || !lookup.phone) {
+              throw new Error(lookup.message ?? "We could not check this number right now.");
+            }
+
+            if (!lookup.registered) {
               setWarning("This number is not registered yet. Please register first.");
               return;
             }
+
             sessionStorage.setItem(
               STORAGE_KEYS.userSession,
-              JSON.stringify({ phone: phoneE164, verifiedAt: Date.now() }),
+              JSON.stringify({ phone: lookup.phone, verifiedAt: Date.now() }),
             );
             // Clean legacy persistent session for stricter security.
             localStorage.removeItem(STORAGE_KEYS.userSession);
@@ -79,4 +70,3 @@ export default function LoginPage() {
     </main>
   );
 }
-

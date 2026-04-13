@@ -7,7 +7,7 @@ type Props = {
   title: string;
   subtitle: string;
   primaryCtaLabel: string;
-  onVerified: (phoneE164: string) => void;
+  onVerified: (phoneE164: string) => void | Promise<void>;
 };
 
 function Spinner() {
@@ -70,7 +70,7 @@ export function OtpFlow({ title, subtitle, primaryCtaLabel, onVerified }: Props)
     try {
       const res = await verifyOtp(phone, code);
       if (!res.ok) throw new Error(res.message ?? "OTP verification failed.");
-      onVerified(phoneE164 || phone);
+      await Promise.resolve(onVerified(phoneE164 || phone));
     } catch (e) {
       setError(e instanceof Error ? e.message : "OTP verification failed.");
     } finally {

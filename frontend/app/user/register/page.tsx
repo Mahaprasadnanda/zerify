@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { OtpFlow } from "@/components/OtpFlow";
+import { registerUser } from "@/lib/userRegistry";
 
 const STORAGE_KEYS = {
   users: "zerify.users.v1",
@@ -39,14 +40,22 @@ export default function RegisterPage() {
           title="Register as new user"
           subtitle="We only register your mobile number. No name, DOB, or Aadhaar details are stored on the server."
           primaryCtaLabel="Verify & register"
-          onVerified={(phoneE164) => {
+          onVerified={async (phoneE164) => {
+            const registration = await registerUser(phoneE164);
+            if (!registration.ok || !registration.phone) {
+              throw new Error(registration.message ?? "Failed to register this number.");
+            }
+
             const users = loadUsers();
-            const next: UserRecord = { phone: phoneE164, registeredAt: Date.now() };
-            const deduped = [next, ...users.filter((u) => u.phone !== phoneE164)];
+            const next: UserRecord = {
+              phone: registration.phone,
+              registeredAt: registration.registeredAt ?? Date.now(),
+            };
+            const deduped = [next, ...users.filter((u) => u.phone !== registration.phone)];
             saveUsers(deduped);
             sessionStorage.setItem(
               STORAGE_KEYS.userSession,
-              JSON.stringify({ phone: phoneE164, verifiedAt: Date.now() }),
+              JSON.stringify({ phone: registration.phone, verifiedAt: Date.now() }),
             );
             // Clean legacy persistent session for stricter security.
             localStorage.removeItem(STORAGE_KEYS.userSession);

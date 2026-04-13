@@ -22,6 +22,7 @@ from app.schemas import (
 )
 from app.verifier import VerificationResult, verify_groth16
 from app.nonce_store import try_mark_nonce_used
+from app.user_registry import is_user_registered, mark_user_registered
 
 settings = get_settings()
 
@@ -63,6 +64,10 @@ class SmsSendRequest(BaseModel):
     requestId: str = ""
 
 
+class UserRegistrationRequest(BaseModel):
+    phone: str = ""
+
+
 def normalize_to_e164_india(raw: str) -> str:
     digits = "".join(ch for ch in str(raw) if ch.isdigit())
 
@@ -91,6 +96,17 @@ def sms_error_response(status_code: int, error: str, to: str = "") -> JSONRespon
             "failed": [{"to": to, "error": error}],
         },
     )
+
+
+def parse_and_normalize_phone(raw: str) -> str:
+    value = (raw or "").strip()
+    if not value:
+        raise HTTPException(status_code=400, detail="Phone required")
+
+    try:
+        return normalize_to_e164_india(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 # -------------------------------
 # CORS
@@ -158,6 +174,37 @@ async def verify_otp(payload: dict):
 
     except Exception as e:
         return {"success": False, "message": str(e)}
+
+
+# -------------------------------
+# USER REGISTRATION
+# -------------------------------
+@api.post("/users/register")
+async def register_user(payload: UserRegistrationRequest):
+    phone_e164 = parse_and_normalize_phone(payload.phone)
+    registered_at = mark_user_registered(phone_e164)
+
+    _logger.info("Registered user phone=%s", mask_phone_number(phone_e164))
+
+    return {
+        "ok": True,
+        "phone": phone_e164,
+        "registered": True,
+        "registeredAt": registered_at,
+    }
+
+
+@api.post("/users/exists")
+async def check_registered_user(payload: UserRegistrationRequest):
+    phone_e164 = parse_and_normalize_phone(payload.phone)
+    registered = is_user_registered(phone_e164)
+
+    return {
+        "ok": True,
+        "phone": phone_e164,
+        "registered": registered,
+    }
+
 
 # -------------------------------
 # SMS SEND
