@@ -1099,6 +1099,15 @@ export default function VerifierPage() {
                   ))}
                 </div>
 
+                <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/25 px-4 py-3 text-sm text-slate-200">
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                    Recipient phone
+                  </div>
+                  <div className="mt-1 break-words font-medium">
+                    {request.recipientPhone ?? Object.keys(request.users ?? {})[0] ?? "Unknown"}
+                  </div>
+                </div>
+
                 {request.purpose ? (
                   <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/25 px-4 py-3 text-sm text-slate-200">
                     <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
