@@ -7,6 +7,7 @@ type Props = {
   title: string;
   subtitle: string;
   primaryCtaLabel: string;
+  onBeforeSend?: (phoneE164: string) => void | Promise<void>;
   onVerified: (phoneE164: string) => void | Promise<void>;
 };
 
@@ -27,7 +28,7 @@ function normalizeToE164India(raw: string): string {
   return "";
 }
 
-export function OtpFlow({ title, subtitle, primaryCtaLabel, onVerified }: Props) {
+export function OtpFlow({ title, subtitle, primaryCtaLabel, onBeforeSend, onVerified }: Props) {
   const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
   const [phase, setPhase] = useState<"phone" | "code">("phone");
@@ -52,6 +53,9 @@ export function OtpFlow({ title, subtitle, primaryCtaLabel, onVerified }: Props)
     setInfo(null);
     setBusy(true);
     try {
+      if (onBeforeSend) {
+        await Promise.resolve(onBeforeSend(phoneE164 || phone));
+      }
       const res = await sendOtp(phone);
       if (!res.ok) throw new Error(res.message ?? "Failed to send OTP.");
       setPhase("code");

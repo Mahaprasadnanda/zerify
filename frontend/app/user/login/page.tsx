@@ -13,6 +13,21 @@ export default function LoginPage() {
   const router = useRouter();
   const [warning, setWarning] = useState<string | null>(null);
 
+  const assertRegistered = async (phoneE164: string) => {
+    const lookup = await isRegisteredUser(phoneE164);
+    if (!lookup.ok || !lookup.phone) {
+      throw new Error(lookup.message ?? "We could not check this number right now.");
+    }
+
+    if (!lookup.registered) {
+      const message = "This number is not registered yet. Please register first.";
+      setWarning(message);
+      throw new Error(message);
+    }
+
+    return lookup.phone;
+  };
+
   useEffect(() => {
     sessionStorage.removeItem(STORAGE_KEYS.userSession);
     localStorage.removeItem(STORAGE_KEYS.userSession);
@@ -28,22 +43,17 @@ export default function LoginPage() {
           title="Login as user"
           subtitle="Enter your registered mobile number. We'll verify it with OTP."
           primaryCtaLabel="Verify & continue"
+          onBeforeSend={async (phoneE164) => {
+            setWarning(null);
+            await assertRegistered(phoneE164);
+          }}
           onVerified={async (phoneE164) => {
             setWarning(null);
-
-            const lookup = await isRegisteredUser(phoneE164);
-            if (!lookup.ok || !lookup.phone) {
-              throw new Error(lookup.message ?? "We could not check this number right now.");
-            }
-
-            if (!lookup.registered) {
-              setWarning("This number is not registered yet. Please register first.");
-              return;
-            }
+            const registeredPhone = await assertRegistered(phoneE164);
 
             sessionStorage.setItem(
               STORAGE_KEYS.userSession,
-              JSON.stringify({ phone: lookup.phone, verifiedAt: Date.now() }),
+              JSON.stringify({ phone: registeredPhone, verifiedAt: Date.now() }),
             );
             // Clean legacy persistent session for stricter security.
             localStorage.removeItem(STORAGE_KEYS.userSession);
