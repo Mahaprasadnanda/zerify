@@ -1,6 +1,5 @@
 import { get, ref, update } from "firebase/database";
-import { signInAnonymously, signOut } from "firebase/auth";
-import { firebaseAuth, firebaseAuthPersistenceReady, firebaseDb } from "@/lib/firebaseClient";
+import { firebaseDb } from "@/lib/firebaseClient";
 
 type RecipientProfile = {
   phoneE164?: string;
@@ -17,24 +16,6 @@ function recipientProfileRef(phoneE164: string) {
   return ref(firebaseDb, `recipientProfiles/${phoneDigits(phoneE164)}`);
 }
 
-async function ensureWritableSession(): Promise<() => Promise<void>> {
-  await firebaseAuthPersistenceReady;
-
-  if (firebaseAuth.currentUser && !firebaseAuth.currentUser.isAnonymous) {
-    return async () => {};
-  }
-
-  if (!firebaseAuth.currentUser) {
-    await signInAnonymously(firebaseAuth);
-  }
-
-  return async () => {
-    if (firebaseAuth.currentUser?.isAnonymous) {
-      await signOut(firebaseAuth);
-    }
-  };
-}
-
 async function readRecipientProfile(phoneE164: string): Promise<RecipientProfile> {
   const snapshot = await get(recipientProfileRef(phoneE164));
   const value = snapshot.val();
@@ -48,7 +29,6 @@ export async function registerUser(phone: string): Promise<{
   message?: string;
 }> {
   const registeredAt = Date.now();
-  const cleanup = await ensureWritableSession();
 
   try {
     await update(recipientProfileRef(phone), {
@@ -68,8 +48,6 @@ export async function registerUser(phone: string): Promise<{
       ok: false,
       message: error instanceof Error ? error.message : "Could not save registration right now.",
     };
-  } finally {
-    await cleanup();
   }
 }
 
