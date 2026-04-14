@@ -137,6 +137,21 @@ function setProgress(pct, msg) {
   if (msg) statusText.textContent = msg;
 }
 
+function getStrictnessMode() {
+  return strictnessSelect?.value ?? "balanced";
+}
+
+function getLivenessQualityPolicy() {
+  const strictness = getStrictnessMode();
+  if (strictness === "strict") {
+    return { minScore: 0.82, minFaceFrac: 0.12, minMeanLuma: 72, minBlurScore: 58 };
+  }
+  if (strictness === "lenient") {
+    return { minScore: 0.72, minFaceFrac: 0.1, minMeanLuma: 52, minBlurScore: 32 };
+  }
+  return { minScore: 0.78, minFaceFrac: 0.11, minMeanLuma: 62, minBlurScore: 42 };
+}
+
 function setModelBadgeText(text) {
   if (modelBadge) modelBadge.textContent = text;
 }
@@ -532,6 +547,7 @@ async function processCapturedFrames(frames) {
   capturedFrames = frames;
   liveAlignedFaces = [];
   clearFramesGrid();
+  const qualityPolicy = getLivenessQualityPolicy();
   for (let i = 0; i < capturedFrames.length; i++) {
     const det = await detectAndExtractFace(capturedFrames[i], 0.5, 0.18);
     if (!det) throw new Error(`No face in frame ${i + 1}`);
@@ -540,9 +556,11 @@ async function processCapturedFrames(frames) {
       score: det.score,
       box: det.box,
       sourceDims: { width: capturedFrames[i].width, height: capturedFrames[i].height },
-      policy: { minScore: 0.8, minFaceFrac: 0.12, minBlurScore: 55 },
+      policy: qualityPolicy,
     });
-    if (!q.ok) throw new Error(`Low quality frame ${i + 1}`);
+    if (!q.ok) {
+      throw new Error(`Low quality frame ${i + 1}: ${q.issues.join(", ")}. Try Balanced/Lenient if lighting is low.`);
+    }
     liveAlignedFaces.push(det);
     renderFrameTile(i, det.alignedFace);
   }
@@ -715,7 +733,7 @@ btnRemoveAadhaar.addEventListener("click", () => {
 
 btnCompare.addEventListener("click", () => {
   if (!liveEmbedding || !aadhaarEmbedding) return;
-  const strictness = strictnessSelect?.value ?? "balanced";
+  const strictness = getStrictnessMode();
   const thresholds =
     strictness === "strict"
       ? { verifiedCos: 0.7, verifiedDist: 0.82, suspiciousMinCos: 0.55, suspiciousMaxCos: 0.7 }
