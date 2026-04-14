@@ -104,7 +104,9 @@ function sanitizeReturnUrl(raw) {
 
 let camera = null;
 let embeddingEngine = null;
-let modelType = "arcface";
+let embeddingEngineLoadPromise = null;
+let modelType = "faceapi";
+let lockedEmbeddingMode = null;
 let livenessPassed = false;
 let qrAndConstraintsPassed = false;
 let faceMatchStatus = null;
@@ -133,6 +135,46 @@ function setProofNote(kind, text) {
 function setProgress(pct, msg) {
   progressFill.style.width = `${pct}%`;
   if (msg) statusText.textContent = msg;
+}
+
+function setModelBadgeText(text) {
+  if (modelBadge) modelBadge.textContent = text;
+}
+
+function startEmbeddingEngineWarmup(base) {
+  if (embeddingEngineLoadPromise) return embeddingEngineLoadPromise;
+  embeddingEngine = embeddingEngine ?? new EmbeddingEngine();
+  embeddingEngineLoadPromise = embeddingEngine
+    .load(`${base}models/mobilefacenet.onnx`)
+    .then((onnxOk) => {
+      modelType = onnxOk ? "arcface" : "faceapi";
+      setModelBadgeText(
+        onnxOk ? `ONNX MobileFaceNet · ${embeddingEngine.embeddingDim}D` : "face-api.js 128D (fallback)",
+      );
+      return onnxOk;
+    })
+    .catch(() => {
+      modelType = "faceapi";
+      setModelBadgeText("face-api.js 128D (fallback)");
+      return false;
+    });
+  return embeddingEngineLoadPromise;
+}
+
+async function ensureEmbeddingModeLocked({ waitMs = 1200 } = {}) {
+  if (lockedEmbeddingMode) return lockedEmbeddingMode;
+  if (embeddingEngineLoadPromise) {
+    const result = await Promise.race([
+      embeddingEngineLoadPromise,
+      new Promise((resolve) => setTimeout(() => resolve("timeout"), waitMs)),
+    ]);
+    if (result === true && embeddingEngine?.isLoaded) {
+      lockedEmbeddingMode = "arcface";
+      return lockedEmbeddingMode;
+    }
+  }
+  lockedEmbeddingMode = embeddingEngine?.isLoaded ? "arcface" : "faceapi";
+  return lockedEmbeddingMode;
 }
 function drawToCanvas(target, source) {
   target.width = source.width;
@@ -282,13 +324,15 @@ async function loadRequestContext() {
     requestMeta.textContent = "Missing request_id or session; open from KYC request page.";
     return;
   }
-  const idxSnap = await get(ref(firebaseDb, `indices/userRequests/${sessionPhone}/${requestId}`));
+  const [idxSnap, rSnap] = await Promise.all([
+    get(ref(firebaseDb, `indices/userRequests/${sessionPhone}/${requestId}`)),
+    get(ref(firebaseDb, `kycRequests/${requestId}`)),
+  ]);
   if (!idxSnap.exists()) {
     requestMeta.textContent = "Request not found for this user.";
     return;
   }
   const idx = idxSnap.val();
-  const rSnap = await get(ref(firebaseDb, `kycRequests/${requestId}`));
   const full = rSnap.exists() ? rSnap.val() : null;
   requestCtx = {
     requestId,
@@ -337,19 +381,17 @@ async function init() {
       return;
     }
     handoffContext.textContent = `Request: ${requestId || "-"} · User: ${handoffPhone || sessionPhone || "-"}`;
-    await loadRequestContext();
-    updateLivenessEnablement();
     const base = import.meta.env.BASE_URL || "/";
-    await loadFaceApiModels(`${base}models/face-api`);
-    embeddingEngine = new EmbeddingEngine();
-    const onnxOk = await embeddingEngine.load(`${base}models/mobilefacenet.onnx`);
-    modelType = onnxOk ? "arcface" : "faceapi";
-    // Model badge intentionally hidden for cleaner UX.
-    if (modelBadge) {
-      modelBadge.textContent = onnxOk ? `ONNX MobileFaceNet · ${embeddingEngine.embeddingDim}D` : "face-api.js 128D (fallback)";
-    }
+    setProgress(15, "Loading request, camera, and face detection...");
     camera = new Camera(videoEl);
-    await camera.start();
+    await Promise.all([
+      loadRequestContext(),
+      loadFaceApiModels(`${base}models/face-api`),
+      camera.start(),
+    ]);
+    updateLivenessEnablement();
+    setModelBadgeText("Warming up embedding model...");
+    void startEmbeddingEngineWarmup(base);
     setProgress(100, "Ready — upload Aadhaar to run QR checks.");
   } catch (err) {
     setProgress(100, `Init failed: ${err.message}`);
@@ -543,10 +585,11 @@ btnRetake.addEventListener("click", () => {
 
 btnConfirm.addEventListener("click", async () => {
   try {
+    const embeddingMode = await ensureEmbeddingModeLocked();
     const embeddings = [];
     for (const face of liveAlignedFaces) {
       let emb = null;
-      if (modelType === "arcface" && embeddingEngine?.isLoaded) emb = await embeddingEngine.getEmbedding(face.alignedFace);
+      if (embeddingMode === "arcface" && embeddingEngine?.isLoaded) emb = await embeddingEngine.getEmbedding(face.alignedFace);
       embeddings.push(emb ?? face.descriptor);
     }
     liveEmbedding = averageEmbeddings(embeddings);
@@ -577,7 +620,8 @@ async function processAadhaarFile(file) {
     aadhaarAlignedData = det;
     drawToCanvas(aadhaarFaceCanvas, det.alignedFace);
     aadhaarFacePreview.classList.remove("hidden");
-    aadhaarEmbedding = modelType === "arcface" && embeddingEngine?.isLoaded
+    const embeddingMode = await ensureEmbeddingModeLocked();
+    aadhaarEmbedding = embeddingMode === "arcface" && embeddingEngine?.isLoaded
       ? await embeddingEngine.getEmbedding(det.alignedFace)
       : det.descriptor;
     drawToCanvas(compareAadhaar, det.alignedFace);
