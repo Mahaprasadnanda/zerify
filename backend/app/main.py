@@ -8,6 +8,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from redis.exceptions import RedisError
 from twilio.rest import Client
 
 from app.config import get_settings
@@ -366,6 +367,8 @@ async def verify_proof(payload: VerifyProofRequest):
         return VerifyProofResponse(verified=False, message="Missing requestContext")
 
     expected_nonce = (ctx.security or {}).get("nonce")
+    if not isinstance(expected_nonce, str) or not expected_nonce:
+        return VerifyProofResponse(verified=False, message="Missing request nonce")
 
     if not public_signals_match_request(
         payload.publicSignals,
@@ -387,6 +390,15 @@ async def verify_proof(payload: VerifyProofRequest):
         raise HTTPException(500, "Verification failed")
 
     if result.valid:
+        try:
+            nonce_is_fresh = try_mark_nonce_used(expected_nonce)
+        except RedisError as e:
+            _logger.error("Nonce replay check failed: %s", e)
+            raise HTTPException(500, "Replay protection unavailable")
+
+        if not nonce_is_fresh:
+            return VerifyProofResponse(verified=False, message="Nonce already used")
+
         return VerifyProofResponse(verified=True, message="ZK proof verified")
 
     return VerifyProofResponse(verified=False, message="Invalid proof")

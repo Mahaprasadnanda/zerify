@@ -44,7 +44,7 @@ def test_nonce_replay_enforcement(fresh):
             lambda _nonce: fresh,
         )
 
-        res = client.post("/verify-proof", json=make_payload(nonce))
+        res = client.post("/api/verify-proof", json=make_payload(nonce))
         assert res.status_code == 200
         body = res.json()
 
@@ -54,3 +54,16 @@ def test_nonce_replay_enforcement(fresh):
             assert body["verified"] is False
             assert "Nonce already used" in body["message"]
 
+
+def test_missing_nonce_is_rejected():
+    client = TestClient(app)
+    payload = make_payload("test-nonce-123")
+    payload["requestContext"]["security"] = {}
+
+    res = client.post("/api/verify-proof", json=payload)
+
+    assert res.status_code == 200
+    assert res.json() == {
+        "verified": False,
+        "message": "Missing request nonce",
+    }
