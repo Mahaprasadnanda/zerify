@@ -159,7 +159,7 @@ Backend responsibilities:
 
 Important note on current state:
 
-- The nonce replay helper exists, but the current `verify_proof` route does not actively enforce nonce replay protection.
+- The `verify_proof` route requires a request nonce and atomically rejects nonce replays after successful proof verification.
 - Legacy backend Twilio OTP endpoints exist, while the primary user OTP flow in the current product is implemented through Next.js API routes in `frontend/app/api/otp/*`.
 
 ## Zero-Knowledge Proof Design
@@ -442,6 +442,7 @@ What leaves the browser in the primary flow:
 Current protections:
 
 - verifier intent is bound into public signals
+- successful proof verification consumes the request nonce atomically; replayed nonces are rejected
 - liveness is required before proof generation in the dedicated prover app
 - face comparison status is attached to the prover result
 - proof is locally verified before submission
@@ -451,8 +452,7 @@ Current protections:
 
 - Firebase web configuration is currently hardcoded in client files instead of being fully environment-driven.
 - Firebase RTDB rules in `frontend/FIREBASE_RTDB_RULES.md` are demo-oriented and should be hardened before production use.
-- Some backend tests appear out of sync with the current API routing and nonce behavior.
-- The backend contains replay-protection utilities, but nonce replay enforcement is not fully wired into the active verification endpoint.
+- Some backend tests and legacy flow artifacts may be out of sync with the current API routing.
 - Local user registration state in the Next.js prover flow is stored in browser storage, which is acceptable for an MVP but not sufficient for production identity management.
 - The repository contains both modern and legacy flow artifacts, so not every endpoint/file is part of the primary happy-path runtime.
 
@@ -481,7 +481,6 @@ npm run build
 
 - move Firebase config to environment variables
 - enforce strict RTDB read/write rules and per-user access scoping
-- fully wire nonce replay protection into proof verification
 - centralize OTP handling to avoid duplicated Twilio paths
 - add CI for frontend build, prover build, and backend tests
 - separate demo assets from production circuit artifacts
