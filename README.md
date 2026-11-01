@@ -20,7 +20,7 @@ Zerify supports two user roles:
 
 The application currently uses a two-site architecture:
 
-- `frontend/`: Next.js app for landing page, verifier dashboard, OTP flows, request management, and prover launcher.
+- `frontend/`: Next.js app for landing page, verifier dashboard, prover phone/password authentication, request management, and prover launcher.
 - `face_matching/`: dedicated browser-side prover application served separately, responsible for Aadhaar image processing, UIDAI QR validation, liveness, face matching, and proof generation/submission.
 
 ## Architecture Overview
@@ -51,7 +51,7 @@ Backend (FastAPI)
 
 ```text
 .
-|-- frontend/         Next.js 14 verifier app and OTP-based user flows
+|-- frontend/         Next.js 14 verifier app and phone/password prover flows
 |-- backend/          FastAPI API for proof verification and QR scan helpers
 |-- face_matching/    Dedicated prover application built with Vite
 |-- Circuit/          Circom circuits, wasm, zkeys, and verification keys
@@ -70,7 +70,7 @@ Key responsibilities:
 
 - Public landing page and product entry point.
 - Verifier authentication with Firebase email/password.
-- OTP-powered user registration and login flows.
+- Phone/password prover registration and login flows.
 - KYC request creation with configurable checks:
   - minimum age
   - required gender
@@ -84,8 +84,8 @@ Important pages:
 
 - `frontend/app/page.tsx`: product landing page.
 - `frontend/app/verifier/page.tsx`: verifier dashboard, request creation, result review, backend proof verification.
-- `frontend/app/user/register/page.tsx`: OTP-based user onboarding.
-- `frontend/app/user/login/page.tsx`: OTP-based user login.
+- `frontend/app/user/register/page.tsx`: phone/password prover onboarding.
+- `frontend/app/user/login/page.tsx`: phone/password prover login.
 - `frontend/app/prover/page.tsx`: request inbox and launcher into the dedicated prover app.
 - `frontend/app/face-verification/page.tsx`: in-app liveness and face verification flow component page.
 
@@ -206,7 +206,7 @@ This is the scheme currently favored by the verifier dashboard when `requireComm
 
 ### Prover flow
 
-1. User registers or logs in via OTP.
+1. User registers or logs in using their mobile number and password.
 2. User opens a request from the prover inbox.
 3. Next.js launcher redirects to the dedicated prover site.
 4. Prover uploads Aadhaar image.
