@@ -1,9 +1,8 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  // Served behind Nginx under a dedicated static path to avoid clashing with
-  // the Next.js prover launcher route at /prover.
-  base: '/prover-app/',
+  // Deployed as a standalone Cloudflare Pages site.
+  base: '/',
   optimizeDeps: {
     exclude: ['onnxruntime-web'],
   },
