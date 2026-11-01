@@ -448,8 +448,6 @@ export default function VerifierPage() {
           createdAt: entry.createdAt,
           recipientPhone: entry.phone,
         };
-        indexUpdates[`recipientProfiles/${entry.phone.replace(/\D/g, "")}/phoneE164`] = entry.phone;
-        indexUpdates[`recipientProfiles/${entry.phone.replace(/\D/g, "")}/updatedAt`] = entry.createdAt;
       }
 
       setSendStage(`Saving ${stagedRequests.length} request indices...`);
