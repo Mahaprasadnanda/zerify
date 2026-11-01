@@ -1,4 +1,4 @@
-import { get, ref, runTransaction } from "firebase/database";
+import { get, ref, update } from "firebase/database";
 import { firebaseDb } from "@/lib/firebaseClient";
 
 type RecipientProfile = {
@@ -25,28 +25,17 @@ export async function registerUser(phone: string, authUid: string): Promise<{
 }> {
   const registeredAt = Date.now();
   try {
-    const result = await runTransaction(
-      recipientProfileRef(phone),
-      (current: RecipientProfile | null) => {
-        if (current?.authUid && current.authUid !== authUid) return;
-        return {
-          ...(current ?? {}),
-          phoneE164: phone,
-          phoneDigits: phoneDigits(phone),
-          authUid,
-          selfRegisteredAt: current?.selfRegisteredAt ?? registeredAt,
-          updatedAt: registeredAt,
-        };
-      },
-      { applyLocally: false },
-    );
-    if (!result.committed) {
-      return { ok: false, message: "An account is already linked to this number. Please login instead." };
-    }
+    await update(recipientProfileRef(phone), {
+      phoneE164: phone,
+      phoneDigits: phoneDigits(phone),
+      authUid,
+      selfRegisteredAt: registeredAt,
+      updatedAt: registeredAt,
+    });
     return {
       ok: true,
       phone,
-      registeredAt: result.snapshot.child("selfRegisteredAt").val() ?? registeredAt,
+      registeredAt,
     };
   } catch (error) {
     return {
