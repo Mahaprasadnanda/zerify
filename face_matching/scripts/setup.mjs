@@ -72,9 +72,19 @@ async function main() {
   try {
     await ensureDir(wasmDir);
     const all = await fs.readdir(ortDist);
-    const wasm = all.filter((f) => f.endsWith('.wasm'));
-    for (const w of wasm) await fs.copyFile(path.join(ortDist, w), path.join(wasmDir, w));
-    console.log(`done (${wasm.length} files)`);
+    const wasm = [];
+    const maxAssetBytes = 25 * 1024 * 1024; // Cloudflare Pages per-file limit
+    for (const file of all.filter((f) => f.endsWith('.wasm'))) {
+      const source = path.join(ortDist, file);
+      const { size } = await fs.stat(source);
+      if (size > maxAssetBytes) {
+        console.log(`\\n        Skipping ${file} (${(size / 1024 / 1024).toFixed(1)} MiB): exceeds Cloudflare Pages 25 MiB asset limit`);
+        continue;
+      }
+      await fs.copyFile(source, path.join(wasmDir, file));
+      wasm.push(file);
+    }
+    console.log(`done (${wasm.length} files copied)`);
   } catch (e) {
     console.log(`FAILED — ${e.message}`);
   }
