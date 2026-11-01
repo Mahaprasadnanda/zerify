@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { OtpFlow } from "@/components/OtpFlow";
 import { registerUser } from "@/lib/userRegistry";
@@ -70,12 +71,12 @@ export default function RegisterPage() {
           >
             Already registered? Login as user
           </a>
-          <a
+          <Link
             className="text-slate-400 underline decoration-slate-700 hover:decoration-slate-400"
             href="/"
           >
             Back to home
-          </a>
+          </Link>
         </div>
       </div>
     </main>
