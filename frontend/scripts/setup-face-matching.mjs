@@ -46,11 +46,11 @@ async function main() {
   process.stdout.write("[1/3] Copying ONNX Runtime WASM … ");
   await ensureDir(wasmDir);
   const all = await fs.readdir(ortDist);
-  const wasm = all.filter((f) => f.endsWith(".wasm"));
   const wasmMjs = all.filter((f) => /^ort-wasm-.*\.mjs$/i.test(f));
-  for (const w of wasm) await fs.copyFile(path.join(ortDist, w), path.join(wasmDir, w));
+  // Large .wasm binaries are fetched from the version-pinned jsDelivr CDN at runtime.
+  // Do not copy them into /public: Cloudflare Workers limits each static asset to 25 MiB.
   for (const m of wasmMjs) await fs.copyFile(path.join(ortDist, m), path.join(wasmDir, m));
-  process.stdout.write(`done (${wasm.length + wasmMjs.length} files)\n`);
+  process.stdout.write(`done (${wasmMjs.length} loader files; WASM binaries served by CDN)\n`);
 
   // 2) ORT UMD bundle (loaded via <script> to avoid webpack ESM minification issues)
   process.stdout.write("[2/3] Copying ORT UMD bundle … ");
