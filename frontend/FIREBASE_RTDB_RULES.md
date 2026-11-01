@@ -52,7 +52,7 @@ If you see registration failures or login gating behaving strangely, the Realtim
     },
     "recipientProfiles": {
       "$phoneDigits": {
-        ".read": true,
+        ".read": "auth != null && data.child('authUid').val() == auth.uid",
         ".write": "auth != null && newData.child('authUid').val() == auth.uid && newData.child('phoneDigits').val() == $phoneDigits && newData.child('phoneE164').isString() && newData.child('selfRegisteredAt').isNumber() && newData.child('updatedAt').isNumber() && (!data.exists() || !data.child('authUid').exists() || data.child('authUid').val() == auth.uid) && (!data.exists() || !data.child('phoneDigits').exists() || newData.child('phoneDigits').val() == data.child('phoneDigits').val()) && (!data.exists() || !data.child('phoneE164').exists() || newData.child('phoneE164').val() == data.child('phoneE164').val()) && (!data.exists() || !data.child('selfRegisteredAt').exists() || newData.child('selfRegisteredAt').val() == data.child('selfRegisteredAt').val())"
       }
     }
@@ -62,13 +62,14 @@ If you see registration failures or login gating behaving strangely, the Realtim
 
 ## What this allows
 
-- Verifiers signed in with email/password can still create and update KYC requests and recipient profiles.
+- Verifiers signed in with email/password create KYC requests and request indices. They do not write to prover-owned recipient profiles; the prover creates their profile during registration.
 - Provers authenticate with Firebase Email/Password using a deterministic internal email alias derived from their phone number; no real email address or SMS is used.
 - A signed-in prover can create or update only the profile associated with their Firebase Auth UID.
 - Prover login checks that the phone profile is linked to the currently signed-in Firebase Auth UID.
-- Public callers cannot overwrite an existing `selfRegisteredAt` with a different value.
+- Unauthenticated callers cannot read or write prover profiles. A prover can read only the profile linked to their Firebase Auth UID.
 
 ## Important
 
 - These are Realtime Database rules. Firestore rules are not used for this flow.
-- After publishing the rules, redeploy the latest frontend. Existing OTP-era profiles do not have an `authUid`; they must be claimed once by creating a password account for the same phone. Because OTP is removed, this does not independently prove phone ownership.
+- Registration uses an authenticated direct update rather than a transaction, so a prover can claim an existing verifier-created phone stub without needing read access to that stub. Existing OTP-era profiles without an `authUid` can be claimed once by creating a password account for the same phone; this does not independently prove phone ownership.
+- Publish these rules only after merging the matching frontend changes, then redeploy the dashboard.
