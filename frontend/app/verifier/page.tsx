@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import {
   signInWithEmailAndPassword,
   signOut,
@@ -744,12 +745,12 @@ export default function VerifierPage() {
                 >
                   Login as Verifier
                 </button>
-                <a
+                <Link
                   className="rounded-2xl border border-slate-800 bg-slate-950/30 px-6 py-4 text-center text-base font-semibold text-slate-100 hover:border-slate-700"
                   href="/"
                 >
                   Back to home
-                </a>
+                </Link>
               </div>
 
               {showLogin ? (
