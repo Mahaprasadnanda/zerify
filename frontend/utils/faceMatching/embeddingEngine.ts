@@ -51,7 +51,9 @@ export class EmbeddingEngine {
   async load(modelUrl: string): Promise<boolean> {
     const o = await ort();
     // Force runtime assets to local static path to avoid `/vendor/ort-wasm-simd-threaded.mjs` resolution.
-    o.env.wasm.wasmPaths = "/wasm/";
+    // Fetch version-matched WebAssembly binaries from a public npm CDN.
+    // This keeps large binaries outside /public and below Cloudflare's 25 MiB asset limit.
+    o.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.3/dist/";
     try {
       this.#session = await o.InferenceSession.create(modelUrl, {
         executionProviders: ["wasm"],
