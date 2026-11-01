@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { get, onValue, ref, update } from "firebase/database";
 import { firebaseDb } from "@/lib/firebaseClient";
 import { gendersMatch } from "@/lib/genderNormalize";
@@ -271,12 +271,9 @@ function StatusRow({
   );
 }
 
-export default function KycRequestPage({
-  params,
-}: {
-  params: { request_id: string };
-}) {
+export default function KycRequestPage() {
   const router = useRouter();
+  const params = useParams<{ request_id: string }>();
   const requestId = params.request_id;
   const faceMatchingBaseUrl = process.env.NEXT_PUBLIC_FACE_MATCHING_URL ?? "http://localhost:3010";
 
