@@ -1,6 +1,6 @@
 /**
  * Setup helper (dev-time) for Face Matching assets:
- * - copies ONNX Runtime WASM files into `public/wasm/`
+ * - copies the small ONNX Runtime loader modules into `public/wasm/`
  * - downloads MobileFaceNet ONNX into `public/models/mobilefacenet.onnx`
  *
  * Runtime is browser-only; assets are served locally by Next.js from /public.
@@ -75,7 +75,8 @@ async function main() {
 
   process.stdout.write("\nSetup complete.\n");
   process.stdout.write("Assets served from:\n");
-  process.stdout.write("  - /public/wasm/*\n");
+  process.stdout.write("  - /public/wasm/* (loader modules)\n");
+  process.stdout.write("  - ONNX Runtime WASM binaries from the pinned jsDelivr CDN\n");
   process.stdout.write("  - /public/vendor/ort.wasm.min.js\n");
   process.stdout.write("  - /public/models/mobilefacenet.onnx\n\n");
 }
