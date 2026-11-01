@@ -390,9 +390,14 @@ async function init() {
     }
     sessionPhone = raw ? JSON.parse(raw).phone ?? null : null;
     if (!sessionPhone) {
-      // Block access when no active authenticated prover session exists.
-      const target = resolveReturnUrl();
-      window.location.replace(target);
+      // Do not redirect to this same origin when opened without a session:
+      // that can reload the prover indefinitely. The authenticated verifier
+      // must launch this page with a session token or an existing session.
+      setProgress(100, "Authentication required — open Zerify from your KYC request link.");
+      if (requestMeta) {
+        requestMeta.textContent = "No active prover session. Return to the Zerify dashboard and open the KYC request link again.";
+      }
+      if (handoffContext) handoffContext.textContent = "Waiting for an authenticated KYC session.";
       return;
     }
     handoffContext.textContent = `Request: ${requestId || "-"} · User: ${handoffPhone || sessionPhone || "-"}`;
