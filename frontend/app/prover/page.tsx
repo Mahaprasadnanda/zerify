@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { get, onValue, ref } from "firebase/database";
 import { firebaseDb } from "@/lib/firebaseClient";
+import { logoutProver } from "@/lib/proverAuth";
 
 const STORAGE_KEYS = {
   userSession: "zerify.user.session",
@@ -187,7 +188,7 @@ export default function ProverPage() {
           <section className="rounded-[2rem] border border-slate-800 bg-slate-950/40 p-7 shadow-soft">
             <h2 className="text-xl font-semibold text-slate-50">Login required</h2>
             <p className="mt-2 text-sm text-slate-300">
-              Please login as user (Twilio OTP) to view your requests.
+              Please login with your registered mobile number and password to view your requests.
             </p>
             <a
               href="/user/login"
@@ -207,6 +208,7 @@ export default function ProverPage() {
                 type="button"
                 className="rounded-2xl border border-slate-800 bg-slate-950/30 px-4 py-2 text-sm font-semibold text-slate-100 hover:border-slate-700"
                 onClick={() => {
+                  void logoutProver();
                   sessionStorage.removeItem(STORAGE_KEYS.userSession);
                   localStorage.removeItem(STORAGE_KEYS.userSession);
                   setSession(null);

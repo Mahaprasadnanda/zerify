@@ -1,9 +1,10 @@
-import { get, ref, update } from "firebase/database";
+import { get, ref, runTransaction } from "firebase/database";
 import { firebaseDb } from "@/lib/firebaseClient";
 
 type RecipientProfile = {
   phoneE164?: string;
   phoneDigits?: string;
+  authUid?: string;
   selfRegisteredAt?: number;
   updatedAt?: number;
 };
@@ -16,32 +17,36 @@ function recipientProfileRef(phoneE164: string) {
   return ref(firebaseDb, `recipientProfiles/${phoneDigits(phoneE164)}`);
 }
 
-async function readRecipientProfile(phoneE164: string): Promise<RecipientProfile> {
-  const snapshot = await get(recipientProfileRef(phoneE164));
-  const value = snapshot.val();
-  return value && typeof value === "object" ? (value as RecipientProfile) : {};
-}
-
-export async function registerUser(phone: string): Promise<{
+export async function registerUser(phone: string, authUid: string): Promise<{
   ok: boolean;
   phone?: string;
   registeredAt?: number;
   message?: string;
 }> {
   const registeredAt = Date.now();
-
   try {
-    await update(recipientProfileRef(phone), {
-      phoneE164: phone,
-      phoneDigits: phoneDigits(phone),
-      selfRegisteredAt: registeredAt,
-      updatedAt: registeredAt,
-    });
-
+    const result = await runTransaction(
+      recipientProfileRef(phone),
+      (current: RecipientProfile | null) => {
+        if (current?.authUid && current.authUid !== authUid) return;
+        return {
+          ...(current ?? {}),
+          phoneE164: phone,
+          phoneDigits: phoneDigits(phone),
+          authUid,
+          selfRegisteredAt: current?.selfRegisteredAt ?? registeredAt,
+          updatedAt: registeredAt,
+        };
+      },
+      { applyLocally: false },
+    );
+    if (!result.committed) {
+      return { ok: false, message: "An account is already linked to this number. Please login instead." };
+    }
     return {
       ok: true,
       phone,
-      registeredAt,
+      registeredAt: result.snapshot.child("selfRegisteredAt").val() ?? registeredAt,
     };
   } catch (error) {
     return {
@@ -51,19 +56,17 @@ export async function registerUser(phone: string): Promise<{
   }
 }
 
-export async function isRegisteredUser(phone: string): Promise<{
+export async function isRegisteredUser(phone: string, authUid: string): Promise<{
   ok: boolean;
   phone?: string;
   registered: boolean;
   message?: string;
 }> {
   try {
-    const profile = await readRecipientProfile(phone);
-    return {
-      ok: true,
-      phone,
-      registered: Boolean(profile.selfRegisteredAt),
-    };
+    const snapshot = await get(recipientProfileRef(phone));
+    const profile = snapshot.val() as RecipientProfile | null;
+    const registered = Boolean(profile?.selfRegisteredAt && profile.authUid === authUid);
+    return { ok: true, phone, registered };
   } catch (error) {
     return {
       ok: false,

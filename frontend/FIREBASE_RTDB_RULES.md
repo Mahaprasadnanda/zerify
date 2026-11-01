@@ -53,7 +53,7 @@ If you see registration failures or login gating behaving strangely, the Realtim
     "recipientProfiles": {
       "$phoneDigits": {
         ".read": true,
-        ".write": "auth != null || (newData.child('phoneDigits').val() == $phoneDigits && newData.child('phoneE164').isString() && newData.child('selfRegisteredAt').isNumber() && newData.child('updatedAt').isNumber() && (!data.exists() || !data.child('phoneDigits').exists() || newData.child('phoneDigits').val() == data.child('phoneDigits').val()) && (!data.exists() || !data.child('phoneE164').exists() || newData.child('phoneE164').val() == data.child('phoneE164').val()) && (!data.exists() || !data.child('selfRegisteredAt').exists() || newData.child('selfRegisteredAt').val() == data.child('selfRegisteredAt').val()))"
+        ".write": "auth != null && newData.child('authUid').val() == auth.uid && newData.child('phoneDigits').val() == $phoneDigits && newData.child('phoneE164').isString() && newData.child('selfRegisteredAt').isNumber() && newData.child('updatedAt').isNumber() && (!data.exists() || !data.child('authUid').exists() || data.child('authUid').val() == auth.uid) && (!data.exists() || !data.child('phoneDigits').exists() || newData.child('phoneDigits').val() == data.child('phoneDigits').val()) && (!data.exists() || !data.child('phoneE164').exists() || newData.child('phoneE164').val() == data.child('phoneE164').val()) && (!data.exists() || !data.child('selfRegisteredAt').exists() || newData.child('selfRegisteredAt').val() == data.child('selfRegisteredAt').val())"
       }
     }
   }
@@ -63,11 +63,12 @@ If you see registration failures or login gating behaving strangely, the Realtim
 ## What this allows
 
 - Verifiers signed in with email/password can still create and update KYC requests and recipient profiles.
-- Users can self-register their phone profile in `recipientProfiles/{phoneDigits}` after OTP verification without needing Firebase Auth.
-- User login can safely check whether `selfRegisteredAt` exists before allowing the OTP flow to continue.
+- Provers authenticate with Firebase Email/Password using a deterministic internal email alias derived from their phone number; no real email address or SMS is used.
+- A signed-in prover can create or update only the profile associated with their Firebase Auth UID.
+- Prover login checks that the phone profile is linked to the currently signed-in Firebase Auth UID.
 - Public callers cannot overwrite an existing `selfRegisteredAt` with a different value.
 
 ## Important
 
 - These are Realtime Database rules. Firestore rules are not used for this flow.
-- After publishing the rules, redeploy the latest frontend so registration writes directly to Firebase without anonymous auth.
+- After publishing the rules, redeploy the latest frontend. Existing OTP-era profiles do not have an `authUid`; they must be claimed once by creating a password account for the same phone. Because OTP is removed, this does not independently prove phone ownership.
