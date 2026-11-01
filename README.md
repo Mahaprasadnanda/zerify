@@ -16,7 +16,7 @@ Zerify combines browser-side Aadhaar QR processing, liveness checks, face matchi
 Zerify supports two user roles:
 
 - Verifier: signs in with Firebase Auth, creates KYC requests, chooses checks and constraints, notifies recipients, and validates submitted proofs.
-- Prover: signs in with OTP, opens assigned KYC requests, uploads an Aadhaar image, passes QR-based eligibility checks, completes liveness and face matching, generates a proof locally, and submits only proof artifacts.
+- Prover: registers and signs in with a mobile number and password through Firebase Authentication, opens assigned KYC requests, uploads an Aadhaar image, passes QR-based eligibility checks, completes liveness and face matching, generates a proof locally, and submits only proof artifacts.
 
 The application currently uses a two-site architecture:
 
@@ -489,3 +489,13 @@ npm run build
 ## Why This Project Stands Out
 
 Zerify is not a generic KYC CRUD application. It is a privacy-preserving identity verification workflow that combines applied cryptography, client-side biometric processing, verifier orchestration, and practical web product design. The codebase already demonstrates a meaningful architecture for selective disclosure KYC, especially in the way it binds verifier intent to zero-knowledge proofs while keeping raw identity data off the backend.
+
+
+### Prover account authentication
+
+- Registration and login use a normalized Indian mobile number plus password.
+- Firebase Email/Password Authentication stores the password securely; the browser never stores the password.
+- To keep the phone number as the visible username while using Firebase's built-in password provider, the client derives a deterministic internal email alias (`prover-{digits}@accounts.zerify.invalid`). This is not a real email address and cannot receive email.
+- Prover profile records are linked to the Firebase Auth UID in `recipientProfiles/{phoneDigits}`.
+- **There is no phone ownership verification.** Without OTP, the number is only an account identifier; users should not treat it as proof that the account holder owns that SIM/number. Password recovery by email is not available with this synthetic alias.
+- Existing OTP-era profiles can be claimed during first password registration if they do not yet have an `authUid`. This is a one-time migration path and does not verify phone ownership.
