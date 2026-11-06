@@ -26,7 +26,7 @@ export type VerifyProofResponse = {
 };
 
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "https://zerify-api.onrender.com/api";
 
 /** SnarkJS verify on the server can take a while; avoid infinite “Verifying…” if the request stalls. */
 const VERIFY_PROOF_TIMEOUT_MS = 180_000;
