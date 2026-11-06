@@ -63,8 +63,9 @@ export async function verifyProof(
   if (!response.ok) {
     let detail = "";
     try {
-      const body = (await response.json()) as { message?: string };
-      if (body?.message) detail = ` ${body.message}`;
+      const body = (await response.json()) as { message?: string; detail?: string };
+      const serverMessage = body?.message ?? body?.detail;
+      if (serverMessage) detail = ` ${serverMessage}`;
     } catch {
       // ignore
     }
