@@ -31,10 +31,28 @@ const API_BASE_URL =
 /** SnarkJS verify on the server can take a while; avoid infinite “Verifying…” if the request stalls. */
 const VERIFY_PROOF_TIMEOUT_MS = 180_000;
 
+/**
+ * Accept all common environment-variable forms:
+ *   https://host
+ *   https://host/api
+ *   https://host/api/verify-proof
+ * The backend route is always /api/verify-proof. In particular, do not
+ * append /verify-proof twice when the full endpoint was configured.
+ */
+function getVerifyProofUrl(): string {
+  const configured = API_BASE_URL.trim().replace(/\/+$/, "");
+  const withoutEndpoint = configured.replace(/\/verify-proof$/i, "");
+  const apiRoot = /\/api$/i.test(withoutEndpoint)
+    ? withoutEndpoint
+    : `${withoutEndpoint}/api`;
+
+  return `${apiRoot}/verify-proof`;
+}
+
 export async function verifyProof(
   payload: VerifyProofPayload,
 ): Promise<VerifyProofResponse> {
-  const url = `${API_BASE_URL.replace(/\/$/, "")}/verify-proof`;
+  const url = getVerifyProofUrl();
 
   let response: Response;
   try {
@@ -54,7 +72,7 @@ export async function verifyProof(
     }
     if (e instanceof TypeError) {
       throw new Error(
-        `Could not reach verification API (${url}). Check CORS, firewall, and that uvicorn is on the same host/port as NEXT_PUBLIC_API_BASE_URL.`,
+        `Could not reach verification API (${url}). Check CORS, firewall, and that the API is reachable at NEXT_PUBLIC_API_BASE_URL.`,
       );
     }
     throw e;
@@ -63,10 +81,11 @@ export async function verifyProof(
   if (!response.ok) {
     let detail = "";
     try {
-      const body = (await response.json()) as { message?: string };
+      const body = (await response.json()) as { message?: string; detail?: string };
       if (body?.message) detail = ` ${body.message}`;
+      else if (body?.detail) detail = ` ${body.detail}`;
     } catch {
-      // ignore
+      // ignore non-JSON error bodies
     }
     throw new Error(`Proof verification failed (${response.status}).${detail}`);
   }
