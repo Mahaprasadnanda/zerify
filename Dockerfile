@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv \
-    libgl1 libglib2.0-0 libzbar0 \
+    libgl1 libglib2.0-0 libgomp1 libzbar0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -18,8 +18,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --upgrade pip && pip install -r /app/backend/requirements.txt
 
-COPY package.json package-lock.json* /app/
-RUN npm install --omit=dev --no-audit --no-fund
+COPY package.json package-lock.json /app/
+RUN npm ci --omit=dev --no-audit --no-fund
 
 COPY backend /app/backend
 
